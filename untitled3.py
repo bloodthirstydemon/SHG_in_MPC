@@ -6,10 +6,15 @@ Created on Wed Mar 20 11:28:27 2024
 """
 
 import numpy as np
+import torch
+import math
+import scipy as sp
+import scipy.constants as const
 import matplotlib.pyplot as plt
 from tkinter import *
 import tkinter as tk
 import pyqtgraph as pg
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, 
                              QHBoxLayout, QLabel, QCheckBox, QDialog, QLineEdit, QDialogButtonBox, 
                              QButtonGroup, QRadioButton)
@@ -17,6 +22,10 @@ import sys
 
 
 class PhaseMatchingWindow(QDialog):
+    
+    # Define a signal to emit the phase matching settings
+    phase_matching_settings_saved = pyqtSignal(dict)
+    
     def __init__(self, parent=None):
         
         super(PhaseMatchingWindow, self).__init__(parent)
@@ -29,10 +38,15 @@ class PhaseMatchingWindow(QDialog):
         self.add_radio_section(layout, "Phase Matching Plane:", ["XY", "YZ", "ZX"], "XY")
         
         # Omega Polarisation
-        self.add_radio_section(layout, "Omega_1 Polarisation:", ["Ordinary", "Extra-ordinary"], "Extra-ordinary")
+        self.add_radio_section(layout, "Omega_1 Polarisation:", ["Ordinary", "Extra-ordinary"], "Ordinary")
         self.add_radio_section(layout, "Omega_2 Polarisation:", ["Ordinary", "Extra-ordinary"], "Ordinary")
         self.add_radio_section(layout, "Omega_3 Polarisation:", ["Ordinary", "Extra-ordinary"], "Ordinary")
         
+        
+        self.label = QLabel("Phase_matching_angle:")
+        self.box_input_Phase_matching_angle = pg.SpinBox(value=30)
+        layout.addWidget(self.label)
+        layout.addWidget(self.box_input_Phase_matching_angle)
         
         warning = QLabel('for the changes to take affect, ok has to be pressed!!!!!')
         layout.addWidget(warning)
@@ -44,9 +58,13 @@ class PhaseMatchingWindow(QDialog):
         layout.addWidget(buttons)
         
         self.setLayout(layout)
+
         
     def ok_button_clicked(self):
-        self.get_selected_values()
+        # Emit the signal with the selected values
+        selected_values = self.get_selected_values()
+        self.phase_matching_settings_saved.emit(selected_values)
+        self.close()
         
     def add_radio_section(self, layout, label_text, options, default_option):
         radio_layout = QHBoxLayout()
@@ -72,7 +90,8 @@ class PhaseMatchingWindow(QDialog):
             "phase_matching_plane": None,
             "omega_1_polarisation": None,
             "omega_2_polarisation": None,
-            "omega_3_polarisation": None
+            "omega_3_polarisation": None,
+            "phase_matching_angle": None
         }
         
         phase_matching_plane_buttons = self.findChildren(QRadioButton)[0:3]
@@ -94,16 +113,18 @@ class PhaseMatchingWindow(QDialog):
         for button in omega_3_buttons:
             if button.isChecked():
                 selected_values["omega_3_polarisation"] = button.text()
+        selected_values["phase_matching_angle"] = float(self.box_input_Phase_matching_angle.value())
         print(selected_values)
         return selected_values
 
 
 class MainWindow(QMainWindow):
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Herriot Cell")
+        self.phase_matching_settings = None  # Initialize phase matching settings
         self.GUI()
-        
         
     def GUI(self):
         
@@ -125,7 +146,7 @@ class MainWindow(QMainWindow):
         self.box_input_crystal_position = self.create_input("Crystal Position", 542.5)
         self.box_input_pattern_size = self.create_input("Pattern Size", 15)
 
-        self.box_input_λ = self.create_input("λ_pump_(in micro_meter)", 1.064)
+        self.box_input_λ1 = self.create_input("λ_pump_(in micro_meter)", 1.064)
         self.box_input_p = self.create_input("air_pressure", 101325)
         self.box_input_h = self.create_input("humidity(0 to 1)", 0)
         self.box_input_xc = self.create_input("co2 in ppm(225)",450)
@@ -175,8 +196,14 @@ class MainWindow(QMainWindow):
         QApplication.closeAllWindows()
         QApplication.quit()
         
+    def save_phase_matching_settings(self, settings):
+        # Store the phase matching settings
+        self.phase_matching_settings = settings
+        return self.phase_matching_settings
+        
     def show_phase_matching_window(self):
         self.phase_matching_window = PhaseMatchingWindow(self)
+        self.phase_matching_window.phase_matching_settings_saved.connect(self.save_phase_matching_settings)
         self.phase_matching_window.exec_()
         
     def create_input(self, label_text, default_value):
@@ -193,6 +220,9 @@ class MainWindow(QMainWindow):
         return spin_box
         
     def calculate_btn_clicked(self):
+        beam = self.phase_matching_settings['omega_1_polarisation']
+        plane = self.phase_matching_settings['phase_matching_plane']
+        phase_matching_angle = self.phase_matching_settings["phase_matching_angle"]
         R1 = float(self.box_input_R1.value())
         R2 = float(self.box_input_R2.value())
         L = float(self.box_input_L.value())
@@ -200,11 +230,11 @@ class MainWindow(QMainWindow):
         crystal_length = float(self.box_input_crystal_thickness.value())
         crystal_position = float(self.box_input_crystal_position.value())
         pattern_size = float(self.box_input_pattern_size.value())
-        λ = float(self.box_input_λ.value())
+        λ1 = float(self.box_input_λ1.value())
         p = float(self.box_input_p.value())
         h = float(self.box_input_h.value())
         xc = float(self.box_input_xc.value())
-        first_mirror, second_mirror = simulate_travel(R1, R2, N, L, crystal_length, crystal_position, pattern_size, λ, p, h, xc).spot_data()
+        first_mirror, second_mirror = simulate_travel(R1, R2, N, L, crystal_length, crystal_position, pattern_size, λ1, p, h, xc, beam, plane, phase_matching_angle).spot_data()
         
         
         if self.checkbox.isChecked():
@@ -377,44 +407,13 @@ class LBO_refractive_index:
                      (λ**2 - 0.021414) - 
                      0.016293 * λ**2)
         return nz
-       
-    def polar_equation(self):
-        return np.sqrt((self.new*self.now)**2/((np.cos(self.theta)**2 * self.new**2) 
-                                               + (np.sin(self.theta)**2 * self.now**2)))
-    
-    
-    
-    def plot(self):
-        # Generate theta values from 0 to 2*pi
-        self.theta = np.linspace(0, 2*np.pi, 1000)
-
-        # Calculate r values using the polar equation
-        self.r = self.polar_equation()
-
-        # Convert polar coordinates to Cartesian coordinates
-        self.x = self.r * np.cos(self.theta)
-        self.y = self.r * np.sin(self.theta)
-
-        # Plot the ellipse
-        plt.figure()
-        plt.plot(self.x, self.y, label='Refractive_index for_y-z plane')
-        plt.title('Refractive_index_Ellipse')
-        plt.xlabel('n(x)')
-        plt.ylabel('n(y)')
-        plt.grid(True)
-        plt.axhline(0, color='black',linewidth=0.5)
-        plt.axvline(0, color='black',linewidth=0.5)
-        plt.legend()
-        plt.show()
-
-
 
 class refractive_index:
     def __init__(self):
         self.N = LBO_refractive_index()
         pass
     
-    def calculate_refractive_indices(self, λ):              #λ in micrometers
+    def calculate_refractive_indices(self, λ, plane):              #λ in micrometers
     
         ''' In this calculations travel direction is always assumed to be z and x is verical and y is horizontal so, rotate the obeject(in this case ellipse),
             according to the phase matching plane and always treat Theta as phase matching angle no matter what
@@ -429,20 +428,40 @@ class refractive_index:
             for extraordinary phi is always pi/20
             for ordinary phi is always pi/20
             '''
-           
-        # Calculations for N2x
-        self.Ny = self.N.nx(λ)
-    
-        # Calculations for N2y
-        self.Nx = self.N.ny(λ)
+        if plane == 'XY':            
+            # Calculations for N2x
+            self.Nz = self.N.nx(λ)
         
-        # Calculations for N2z
-        self.Nz = self.N.nz(λ)
+            # Calculations for N2y
+            self.Ny = self.N.ny(λ)
+            
+            # Calculations for N2z
+            self.Nx = self.N.nz(λ)
+            
+        elif plane == 'YZ':
+            # Calculations for N2x
+            self.Nx = self.N.nx(λ)
         
+            # Calculations for N2y
+            self.Ny = self.N.ny(λ)
+            
+            # Calculations for N2z
+            self.Nz = self.N.nz(λ)
+            
+        elif plane == 'ZX':
+            # Calculations for N2x
+            self.Ny = self.N.nx(λ)
+        
+            # Calculations for N2y
+            self.Nx = self.N.ny(λ)
+            
+            # Calculations for N2z
+            self.Nz = self.N.nz(λ)
+            
         return  self.Nx, self.Ny, self.Nz
         
-    def calculate_neff(self, λ, θ, φ):
-        Nx, Ny, Nz = self.calculate_refractive_indices(λ)
+    def calculate_neff(self, λ, plane, θ, φ):
+        Nx, Ny, Nz = self.calculate_refractive_indices(λ, plane)
         cos_φ = np.cos(φ)
         sin_φ = np.sin(φ)
         cos_θ = np.cos(θ)
@@ -456,7 +475,9 @@ class refractive_index:
         print(neff)
         
         return neff
-    
+
+
+
 class abcd_matrices:
     
     def initial_condition(self, x0, y0, xd, yd):
@@ -509,9 +530,14 @@ class abcd_matrices:
               [0, 0, 1, 0],
               [0, 0, 0, 1]]
         return np.array(op)
-        
+    
+    
+    
+    
 class simulate_travel:
-    def __init__(self, R1, R2, N, cell_length, crystal_length, crystal_position, pattern_size, λ, p, h, xc):
+    def __init__(self, R1, R2, N, cell_length, crystal_length, crystal_position, pattern_size, λ1, p, h, xc, beam, plane, phase_matching_angle):
+        self.λ1 = λ1
+        self.λ2 = λ1 / 2
         self.N = N  # number of bounces on one mirror
         self.R1 = R1  # radius of curvature
         self.R2 = R2
@@ -523,6 +549,9 @@ class simulate_travel:
         self.f = self.R1 / 2  # focal length
         self.M = self.N - 1  # parameter M   M=N-1 means the longest configuration
         self.pattern_size = pattern_size
+        self.beam = beam 
+        self.plane = plane
+        self.phase_matching_angle = phase_matching_angle
         
         #initial_coordinates
         
@@ -547,7 +576,7 @@ class simulate_travel:
         
         
         self.n_air_p = Air_refractive_index()
-        self.n_air_at_p = self.n_air_p.n(λ, p, h, xc)
+        self.n_air_at_p = self.n_air_p.n(λ1, p, h, xc)
         self.refractive_index = refractive_index()
         
         
@@ -555,70 +584,6 @@ class simulate_travel:
         self.abcd_matrices = abcd_matrices()
         self.propogation()
         #self.graph_pattern()
-        
-# =============================================================================
-#         
-# =============================================================================
-    def after_d1_travel_in_air(self, M_in):
-        return self.M_d1 @ M_in
-    
-    def after_d2_travel_in_air(self, M_in):
-        return self.M_d2 @ M_in
-    
-    def after_dcrystal_travel(self, M_in):
-        return self.M_in_crystal @ M_in
-    
-    def after_reflection_from_m1(self, M_in):
-        return self.M_f1m @ M_in
-    
-    def after_reflection_from_m2(self, M_in):
-        return self.M_f2m @ M_in
-    
-    def mirror_transformation(self, M_in):
-        return self.M_mrr @ M_in
-    
-    def after_refraction(self, M_in, bool):         #if bool = true {air to crystal} else {crystal to air}
-        self.neff = self.calculate_refractiv_index(M_in, 'extraordinary')[0]                           #[0] to deal with the dimentions only
-        print(self.neff)
-        return self.matrices.matrix_for_refraction(bool, self.n_air_at_p, self.neff, self.n_air_at_p, self.neff) @ M_in
-    
-    def calculate_refractiv_index(self, M_in, beam):
-        result = self.matrices.theta_and_phi_operator()@M_in
-        phase_matching_angle = 31.6*(np.pi/180)                                               #######put your phase mathing angle here
-        theta, phi = result[2], result[3]
-        
-        ''' for ordinary beam rotation in non phase_matching plane is affective(resulting in RI change) but,
-            usually not much beacuse it is close to (N*pi/2) rad on the ellipse.
-            for extraordinary beam rotation in phase_matching plane is affective(resulting in RI change). 
-            significant in this case because it is near phase matching angle.
-            '''
-            
-        if beam == 'ordinary':
-            
-            theta_transformed = np.pi/2
-            phi_transformed = phi
-            
-        elif beam == 'extraordinary':
-            
-            theta_transformed = np.pi/2+phase_matching_angle+theta
-            phi_transformed = np.pi/2
-            
-        else:
-            print('error: put beam type')
-            
-        print(theta_transformed, phi_transformed)
-        
-        '''here we use a tricjk to transofrm the cell system to the crystal system just by replacing nx and ny 
-        (rotating the elipsoid instead of coordinate system whichis esssentially the same)'''
-        n = self.refractive_index.calculate_neff(0.515, theta_transformed, phi_transformed)
-        
-        return n
-
-    def calculate_phase_shift(self, lambda1, lambda2, d, theta, phi):
-        result = self.matrices.theta_and_phi_operator()@M_in
-        travel_length = d*np.sqrt((1/np.cos(theta)**2)+(1/np.cos(phi)**2))
-        dk = calculate_refractiv_index(self, M_in, beam)
-        dpsi = dk*travel_length
 
 # =============================================================================
 # travel fundamental 
@@ -710,6 +675,18 @@ class simulate_travel:
         return self.travel_data
     
     
+    # =============================================================================
+    #   calculate_phase_difference
+    # =============================================================================
+    def calculate_phase_difference(self, n1, n2, d):
+        dk = (2*np.pi/self.λ2)*(n1-n2)
+        d_psi = dk*d
+        return d_psi
+    
+    # =============================================================================
+    #   saving and organising the travel data
+    # =============================================================================
+        
     def spot_data(self):
         first_mirror = np.zeros(shape=(self.N,2))
         second_mirror = np.zeros(shape=(self.N,2))
@@ -721,7 +698,7 @@ class simulate_travel:
         return first_mirror, second_mirror
     
     # =============================================================================
-    # just for testing purposes 
+    #   just for testing purposes 
     # =============================================================================
     
     def graph_pattern(self):
@@ -733,6 +710,211 @@ class simulate_travel:
         plt.figure()
         plt.scatter(second_mirror[:,0], second_mirror[:,1])
         
+    # =============================================================================
+    #   define operations
+    # =============================================================================
+    def after_d1_travel_in_air(self, M_in):
+        return self.M_d1 @ M_in
+    
+    def after_d2_travel_in_air(self, M_in):
+        return self.M_d2 @ M_in
+    
+    def after_dcrystal_travel(self, M_in):
+        return self.M_in_crystal @ M_in
+    
+    def after_reflection_from_m1(self, M_in):
+        return self.M_f1m @ M_in
+    
+    def after_reflection_from_m2(self, M_in):
+        return self.M_f2m @ M_in
+    
+    def mirror_transformation(self, M_in):
+        return self.M_mrr @ M_in
+    
+    def after_refraction(self, M_in, bool):         #if bool = true {air to crystal} else {crystal to air}
+        self.neff = self.calculate_refractiv_index(M_in)[0]                           #[0] to deal with the dimentions only
+        print(self.neff)
+        return self.matrices.matrix_for_refraction(bool, self.n_air_at_p, self.neff, self.n_air_at_p, self.neff) @ M_in
+    
+    
+# =============================================================================
+#       refractive index calculation
+# =============================================================================
+
+    '''refractive index calculation depending on theta, phi, type of beam'''
+    
+    def calculate_refractiv_index(self, M_in):
+        result = self.matrices.theta_and_phi_operator()@M_in                                         #######put your phase mathing angle here
+        theta, phi = result[2], result[3]
+        
+        ''' for ordinary beam rotation in non phase_matching plane is affective(resulting in RI change) but,
+            usually not much beacuse it is close to (N*pi/2) rad on the ellipse.
+            for extraordinary beam rotation in phase_matching plane is affective(resulting in RI change). 
+            significant in this case because it is near phase matching angle.
+            '''
+            
+        if self.beam == 'Ordinary':
+            
+            theta_transformed = np.pi/2
+            phi_transformed = phi
+            
+        elif self.beam == 'Extra-ordinary':
+            
+            theta_transformed = np.pi/2+self.phase_matching_angle+theta
+            phi_transformed = np.pi/2
+            
+        else:
+            print('error: put beam type')
+            
+        print(theta_transformed, phi_transformed)
+        
+        '''here we use a tricjk to transofrm the cell system to the crystal system just by replacing nx and ny 
+        (rotating the elipsoid instead of coordinate system whichis esssentially the same)'''
+        n = self.refractive_index.calculate_neff(self.λ1, self.plane, theta_transformed, phi_transformed)
+        
+        return n
+    # =============================================================================
+    # phase shift calculations
+    # =============================================================================
+    
+    def calculate_phase_shift(self, lambda1, lambda2, d, theta, phi):
+        result = self.matrices.theta_and_phi_operator()@M_in
+        travel_length = d*np.sqrt((1/np.cos(theta)**2)+(1/np.cos(phi)**2))
+        dk = calculate_refractiv_index(self, M_in, beam, plane)
+        dpsi = dk*travel_length
+
+
+# =============================================================================
+# class calculation_for_second_harmonic:
+#     
+#     def __init__(self, thetta, phi):      
+#         ################################################################################################################
+#         'parametrs'
+#         ################################################################################################################
+#         
+#         
+#         '''for qrartz d11 = 0.3 (pm/V) d14 = 0.008 (pm/V)
+#         in imperical units d11 = 0.3e-12 (m/V) d14 = 0.008e-12 (m/V)'''
+#         
+#         C = const.c
+#         wl = 1064e-9 #(1050nm)
+#         n1 = 1.5342
+#         n2 = 1.5445
+#         k1 = 2*np.pi*n1/1064e-9
+#         k2 = 2*np.pi*n2/582e-9
+#         delta_k = k2 - 2*k1
+#         
+#         
+#         e0 = 6140032    #V/m
+#         tau = 5e-9
+#         t = np.linspace(-5e-8, 5e-8, 10)
+#         omega = 2*(np.pi)*C/wl
+#         rp_at_1050 = np.radians(6732.5)      #in rad/mm
+#         l = 0.03
+#         number_of_steps_z = 40
+#         z = np.linspace(0, l, number_of_steps_z)
+#         dz = z[1] - z[0]     #in mm
+#         x = np.linspace(0, 0, number_of_steps_z)
+#         y = np.linspace(0, 0, number_of_steps_z)
+# 
+# 
+#         ################################################################################################################
+#         'define suceptibilty tensor'
+#         ################################################################################################################
+#         
+#         
+#         d11 = 0.3e-12
+#         d12 = -0.3e-12
+#         d13 = 0
+#         d14 = 0.008e-12
+#         d15 = 0
+#         d16 = 0
+#         d21 = 0
+#         d22 = 0
+#         d23 = 0
+#         d24 = 0
+#         d25 = -0.008e-12
+#         d26 = -0.3e-12
+#         d31 = 0
+#         d32 = 0
+#         d33 = 0
+#         d34 = 0
+#         d35 = 0
+#         d36 = 0
+#         
+#         tensor = ([[d11, d12, d13, d14, d15, d16],
+#                       [d21, d22, d23, d24, d25, d26],
+#                       [d31, d32, d33, d34, d35, d36]])
+#         
+#         tensor_d =  torch.tensor(tensor) 
+# 
+# 
+#     ################################################################################################################
+#     'define electic_field tensor'
+#     ################################################################################################################
+#     
+#     def e(self, e0t, z, rp_at_1050):
+#         e_x = float(e0*np.cos(rp_at_1050*z))
+#         e_y = float(e0*np.sin(rp_at_1050*z))
+#         e_z = float(0)
+#         e_xyz = torch.tensor([[e_x**2],
+#                      [e_y**2],
+#                      [e_z],
+#                      [2*e_y*e_z],
+#                      [2*e_x*e_z],
+#                      [2*e_x*e_y]])
+#         return e_xyz
+# 
+#     ################################################################################################################
+#     '''Function Definitions for Laser Pulses'''
+#     ################################################################################################################
+#     
+#     
+#     def e0t(self, t, tau, e0, omega):
+#         """Returns the electic field envelope of a Gaussian pulse with given parameters.
+#     
+#         Args:
+#             t : time
+#             tau : Intensity FWHM pulse width
+#             E0 : peak electric field strength
+#         """
+#         sigma_t =  tau / (2*np.sqrt(2*np.log(2)))
+#         return e0 * np.exp(-t**2 / (2*sigma_t)**2)*np.sin(omega*t)
+# 
+# 
+#     ################################################################################################################
+#     'calculation'
+#     ################################################################################################################
+#     
+#     P = torch.empty(number_of_steps_z,3,1, dtype = torch.complex64)
+#     
+#     # Define the integral function
+#     def integrand(self, z):
+#         return np.exp(1j * delta_k * z)
+#     
+#     for i in range(number_of_steps_z):
+#         P[i] += (-1j*omega/n2*C)*integrand(i*dz)*(torch.matmul(tensor_d, e(e0, dz*i, rp_at_1050)))
+#         
+#             
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# =============================================================================
+
+
+
+
+
+
+
+
+
+
+
         
 app = QApplication(sys.argv)
 window = MainWindow()
@@ -742,9 +924,15 @@ window.close()
 
 
 # =============================================================================
-'problems right now'
+'problems & notes right now'
 # =============================================================================
 # there scemes to be no dependancy over refractive index of either air or nl crystal which we want to include  --- problem solved
 # after operator operate on the inpuut 4*1 vector they should not change for the next opticxal element operation   --- problem solved
 # write a function that goes after the surface refraction part and solve the electric filed equations and manley-rowe relations  --- going to start soon
 
+# 26/04/2024 update:(Notes)
+# having problems withh selcting the beam type and which beam from the selection menu function over there are unfinished so be careful  ---solved(29/04/2024)
+# lets calculate fundamental beam first and we cn proceed
+# idea is good but we need correct way to store beam data so function can use it even in loop without going default  ---solved(29/04/2024)
+# may be one solution could be to load data in __init__ of silulate travel and then can be used efficiently.
+# make refracive index calculation and every function in that class wavelength dependent and the from __init__ we can use it... (Enjoy the weekend!)
