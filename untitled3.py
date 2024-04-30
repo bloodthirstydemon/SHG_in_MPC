@@ -34,14 +34,19 @@ class PhaseMatchingWindow(QDialog):
         
         layout = QVBoxLayout()
         
+        # Phase_matching_type
+        self.phase_matching_type_buttons = self.add_radio_section(layout, "Phase Matching type:", ["Type-I", "Type-II"], "Type-I")        
+        
         # Phase Matching Plane
         self.add_radio_section(layout, "Phase Matching Plane:", ["XY", "YZ", "ZX"], "XY")
         
         # Omega Polarisation
-        self.add_radio_section(layout, "Omega_1 Polarisation:", ["Ordinary", "Extra-ordinary"], "Ordinary")
+        self.omega_1_buttons = self.add_radio_section(layout, "Omega_1 Polarisation:", ["Ordinary", "Extra-ordinary"], "Ordinary")
         self.add_radio_section(layout, "Omega_2 Polarisation:", ["Ordinary", "Extra-ordinary"], "Ordinary")
-        self.add_radio_section(layout, "Omega_3 Polarisation:", ["Ordinary", "Extra-ordinary"], "Ordinary")
         
+        
+        for button in self.phase_matching_type_buttons:
+            button.clicked.connect(lambda state, button=button: self.disable_other_radios(button, self.omega_1_buttons))
         
         self.label = QLabel("Phase_matching_angle:")
         self.box_input_Phase_matching_angle = pg.SpinBox(value=30)
@@ -66,6 +71,11 @@ class PhaseMatchingWindow(QDialog):
         self.phase_matching_settings_saved.emit(selected_values)
         self.close()
         
+    def disable_other_radios(self, clicked_button, radio_buttons):
+        for button in radio_buttons:
+            if button is not clicked_button:
+                button.setEnabled(not clicked_button.isChecked())
+        
     def add_radio_section(self, layout, label_text, options, default_option):
         radio_layout = QHBoxLayout()
         
@@ -73,46 +83,49 @@ class PhaseMatchingWindow(QDialog):
         radio_layout.addWidget(label)
         
         button_group = QButtonGroup(self)
+        buttons = []
         
         for option in options:
             radio_button = QRadioButton(option)
             button_group.addButton(radio_button)
             radio_layout.addWidget(radio_button)
+            buttons.append(radio_button)
             
             if option == default_option:
                 radio_button.setChecked(True)
         
         layout.addLayout(radio_layout)
+        return buttons
     
     def get_selected_values(self):
         
         selected_values = {
+            "phase_matching_type": None,
             "phase_matching_plane": None,
-            "omega_1_polarisation": None,
+            "pump_beam_polarisation": None,
             "omega_2_polarisation": None,
-            "omega_3_polarisation": None,
             "phase_matching_angle": None
         }
+        phase_matching_plane_buttons = self.findChildren(QRadioButton)[0:2]
+        for button in phase_matching_plane_buttons:
+            if button.isChecked():
+                selected_values["phase_matching_type"] = button.text()
         
-        phase_matching_plane_buttons = self.findChildren(QRadioButton)[0:3]
+        phase_matching_plane_buttons = self.findChildren(QRadioButton)[2:5]
         for button in phase_matching_plane_buttons:
             if button.isChecked():
                 selected_values["phase_matching_plane"] = button.text()
         
-        omega_1_buttons = self.findChildren(QRadioButton)[3:5]  # Assuming the order in the layout
+        omega_1_buttons = self.findChildren(QRadioButton)[5:7]  # Assuming the order in the layout
         for button in omega_1_buttons:
             if button.isChecked():
-                selected_values["omega_1_polarisation"] = button.text()
+                selected_values["pump_beam_polarisation"] = button.text()
         
-        omega_2_buttons = self.findChildren(QRadioButton)[5:7]  # Assuming the order in the layout
+        omega_2_buttons = self.findChildren(QRadioButton)[7:9]  # Assuming the order in the layout
         for button in omega_2_buttons:
             if button.isChecked():
                 selected_values["omega_2_polarisation"] = button.text()
         
-        omega_3_buttons = self.findChildren(QRadioButton)[7:]  # Assuming the order in the layout
-        for button in omega_3_buttons:
-            if button.isChecked():
-                selected_values["omega_3_polarisation"] = button.text()
         selected_values["phase_matching_angle"] = float(self.box_input_Phase_matching_angle.value())
         print(selected_values)
         return selected_values
@@ -220,7 +233,7 @@ class MainWindow(QMainWindow):
         return spin_box
         
     def calculate_btn_clicked(self):
-        beam = self.phase_matching_settings['omega_1_polarisation']
+        beam_type = self.phase_matching_settings['pump_beam_polarisation']
         plane = self.phase_matching_settings['phase_matching_plane']
         phase_matching_angle = self.phase_matching_settings["phase_matching_angle"]
         R1 = float(self.box_input_R1.value())
@@ -234,7 +247,10 @@ class MainWindow(QMainWindow):
         p = float(self.box_input_p.value())
         h = float(self.box_input_h.value())
         xc = float(self.box_input_xc.value())
-        first_mirror, second_mirror = simulate_travel(R1, R2, N, L, crystal_length, crystal_position, pattern_size, λ1, p, h, xc, beam, plane, phase_matching_angle).spot_data()
+        phase_matching_type = self.phase_matching_settings['phase_matching_type']
+        first_mirror, second_mirror = simulate_travel(R1, R2, N, L, crystal_length, crystal_position, pattern_size,                             #cell geometry
+                                                      λ1, p, h, xc,                                                                             #air properties
+                                                      beam_type, plane, phase_matching_angle, phase_matching_type).spot_data()                  #phase_matching_settings
         
         
         if self.checkbox.isChecked():
@@ -373,22 +389,11 @@ class Air_refractive_index:
 class LBO_refractive_index:
     
     def __init__(self):
-        self.w1 = 1.030                              #wavelength in micro meter
-        self.w2 = 0.515                              #wavelength in micro meter
-        self.now = self.nz(self.w1)
-        self.new = self.nx(self.w1)
-        self.no2w = self.nz(self.w2)
-        self.ne2w = self.nx(self.w2)
-        self.crystal_length = 1500                   #crystal width in micro meter
-        self.dtheta = 0.013824                       #incident angle of k and crystal plane
-        self.theta = np.linspace(0, 2*np.pi, 1000)
-        
-        
+        pass
 # =============================================================================
 # refractive inex calculation of LBO
 # =============================================================================
 
-            
     def nx(self, λ):                                            #--> n(α)
         nx = np.sqrt(2.45768 + 0.0098877 /
                      (λ**2 - 0.026095) - 
@@ -532,10 +537,8 @@ class abcd_matrices:
         return np.array(op)
     
     
-    
-    
 class simulate_travel:
-    def __init__(self, R1, R2, N, cell_length, crystal_length, crystal_position, pattern_size, λ1, p, h, xc, beam, plane, phase_matching_angle):
+    def __init__(self, R1, R2, N, cell_length, crystal_length, crystal_position, pattern_size, λ1, p, h, xc, beam_type, plane, phase_matching_angle, phase_matching_type):
         self.λ1 = λ1
         self.λ2 = λ1 / 2
         self.N = N  # number of bounces on one mirror
@@ -549,9 +552,10 @@ class simulate_travel:
         self.f = self.R1 / 2  # focal length
         self.M = self.N - 1  # parameter M   M=N-1 means the longest configuration
         self.pattern_size = pattern_size
-        self.beam = beam 
+        self.beam_type = beam_type 
         self.plane = plane
         self.phase_matching_angle = phase_matching_angle
+        self.phase_matching_type = phase_matching_type
         
         #initial_coordinates
         
@@ -595,6 +599,8 @@ class simulate_travel:
         self.travel_data = np.zeros(shape=((self.N*4)+1, 4, 1))
         initial_matrix = self.abcd_matrices.initial_condition(self.x0, self.y0, self.xslope, self.yslope)
         self.travel_data[0] = initial_matrix
+        self.polarisation_data = []
+        self.relative_phase_data = []
         
 
         for i in range(0, self.N):
@@ -732,7 +738,8 @@ class simulate_travel:
         return self.M_mrr @ M_in
     
     def after_refraction(self, M_in, bool):         #if bool = true {air to crystal} else {crystal to air}
-        self.neff = self.calculate_refractiv_index(M_in)[0]                           #[0] to deal with the dimentions only
+        polarisation = self.polarisation_calculation(M_in)
+        self.neff = self.calculate_refractiv_index(polarisation)[0]                           #[0] to deal with the dimentions only
         print(self.neff)
         return self.matrices.matrix_for_refraction(bool, self.n_air_at_p, self.neff, self.n_air_at_p, self.neff) @ M_in
     
@@ -743,32 +750,50 @@ class simulate_travel:
 
     '''refractive index calculation depending on theta, phi, type of beam'''
     
-    def calculate_refractiv_index(self, M_in):
+    def polarisation_calculation(self, M_in):
         result = self.matrices.theta_and_phi_operator()@M_in                                         #######put your phase mathing angle here
-        theta, phi = result[2], result[3]
+        x, y, theta, phi = result[0], result[1], result[2], result[3]
         
-        ''' for ordinary beam rotation in non phase_matching plane is affective(resulting in RI change) but,
-            usually not much beacuse it is close to (N*pi/2) rad on the ellipse.
-            for extraordinary beam rotation in phase_matching plane is affective(resulting in RI change). 
-            significant in this case because it is near phase matching angle.
-            '''
+        ''' Just a note: 
+                        for ordinary beam rotation in non phase_matching plane is affective(resulting in RI change) but,
+                        usually not much beacuse it is close to (N*pi/2) rad on the ellipse.
+                        for extraordinary beam rotation in phase_matching plane is affective(resulting in RI change). 
+                        significant in this case because it is near phase matching angle.
+        '''
+        
+        if self.phase_matching_type == 'Type-I':
             
-        if self.beam == 'Ordinary':
-            
-            theta_transformed = np.pi/2
-            phi_transformed = phi
-            
-        elif self.beam == 'Extra-ordinary':
+            if self.beam_type == 'Ordinary':
+                
+                theta_transformed = np.pi/2
+                phi_transformed = phi
+                
+            elif self.beam_type == 'Extra-ordinary':
+                
+                theta_transformed = np.pi/2+self.phase_matching_angle+theta
+                phi_transformed = np.pi/2
+                
+        elif self.phase_matching_type == 'Type-II':
             
             theta_transformed = np.pi/2+self.phase_matching_angle+theta
-            phi_transformed = np.pi/2
+            phi_transformed = np.pi/4+phi
             
         else:
             print('error: put beam type')
             
         print(theta_transformed, phi_transformed)
+        M_out = [[x],
+                [y],
+                [theta_transformed],
+                [phi_transformed]]
+        M_in = np.array(M_in)
+        return np.array(M_in)
+    
+    def calculate_refractiv_index(self, M_in):
+        result = self.matrices.theta_and_phi_operator()@M_in
+        theta_transformed, phi_transformed = result[2], result[3]
         
-        '''here we use a tricjk to transofrm the cell system to the crystal system just by replacing nx and ny 
+        '''here we use a trick to transofrm the cell system to the crystal system just by replacing nx and ny 
         (rotating the elipsoid instead of coordinate system whichis esssentially the same)'''
         n = self.refractive_index.calculate_neff(self.λ1, self.plane, theta_transformed, phi_transformed)
         
@@ -780,14 +805,14 @@ class simulate_travel:
     def calculate_phase_shift(self, lambda1, lambda2, d, theta, phi):
         result = self.matrices.theta_and_phi_operator()@M_in
         travel_length = d*np.sqrt((1/np.cos(theta)**2)+(1/np.cos(phi)**2))
-        dk = calculate_refractiv_index(self, M_in, beam, plane)
+        dk = calculate_refractiv_index(self, M_in, beam_type, plane)
         dpsi = dk*travel_length
 
 
 # =============================================================================
 # class calculation_for_second_harmonic:
 #     
-#     def __init__(self, thetta, phi):      
+#     def __init__(self, theta, phi, d):      
 #         ################################################################################################################
 #         'parametrs'
 #         ################################################################################################################
@@ -795,27 +820,23 @@ class simulate_travel:
 #         
 #         '''for qrartz d11 = 0.3 (pm/V) d14 = 0.008 (pm/V)
 #         in imperical units d11 = 0.3e-12 (m/V) d14 = 0.008e-12 (m/V)'''
-#         
-#         C = const.c
-#         wl = 1064e-9 #(1050nm)
-#         n1 = 1.5342
-#         n2 = 1.5445
-#         k1 = 2*np.pi*n1/1064e-9
-#         k2 = 2*np.pi*n2/582e-9
-#         delta_k = k2 - 2*k1
+#         self.theta = theta
+#         self.phi = phi
+#         self.C = const.c
+#         self.k1 = 2*np.pi*n1/1064e-9
+#         self.k2 = 2*np.pi*n2/582e-9
+#         self.delta_k = k2 - 2*k1
 #         
 #         
-#         e0 = 6140032    #V/m
-#         tau = 5e-9
-#         t = np.linspace(-5e-8, 5e-8, 10)
-#         omega = 2*(np.pi)*C/wl
-#         rp_at_1050 = np.radians(6732.5)      #in rad/mm
-#         l = 0.03
-#         number_of_steps_z = 40
-#         z = np.linspace(0, l, number_of_steps_z)
-#         dz = z[1] - z[0]     #in mm
-#         x = np.linspace(0, 0, number_of_steps_z)
-#         y = np.linspace(0, 0, number_of_steps_z)
+#         self.e0 = 6140032    #V/m
+#         self.tau = 5e-9
+#         self.t = np.linspace(-5e-8, 5e-8, 10)
+#         self.omega = 2*(np.pi)*C/wl
+#         self.number_of_steps_z = 40
+#         self.z = np.linspace(0, d, number_of_steps_z)
+#         self.dz = z[1] - z[0]     #in mm
+#         self.x = np.linspace(0, 0, number_of_steps_z)
+#         self.y = np.linspace(0, 0, number_of_steps_z)
 # 
 # 
 #         ################################################################################################################
@@ -823,39 +844,38 @@ class simulate_travel:
 #         ################################################################################################################
 #         
 #         
-#         d11 = 0.3e-12
-#         d12 = -0.3e-12
-#         d13 = 0
-#         d14 = 0.008e-12
-#         d15 = 0
-#         d16 = 0
-#         d21 = 0
-#         d22 = 0
-#         d23 = 0
-#         d24 = 0
-#         d25 = -0.008e-12
-#         d26 = -0.3e-12
-#         d31 = 0
-#         d32 = 0
-#         d33 = 0
-#         d34 = 0
-#         d35 = 0
-#         d36 = 0
+#         self.d11 = 0.3e-12
+#         self.d12 = -0.3e-12
+#         self.d13 = 0
+#         self.d14 = 0.008e-12
+#         self.d15 = 0
+#         self.d16 = 0
+#         self.d21 = 0
+#         self.d22 = 0
+#         self.d23 = 0
+#         self.d24 = 0
+#         self.d25 = -0.008e-12
+#         self.d26 = -0.3e-12
+#         self.d31 = 0
+#         self.d32 = 0
+#         self.d33 = 0
+#         self.d34 = 0
+#         self.d35 = 0
+#         self.d36 = 0
 #         
-#         tensor = ([[d11, d12, d13, d14, d15, d16],
+#         self.tensor = ([[d11, d12, d13, d14, d15, d16],
 #                       [d21, d22, d23, d24, d25, d26],
 #                       [d31, d32, d33, d34, d35, d36]])
 #         
-#         tensor_d =  torch.tensor(tensor) 
-# 
+#         self.tensor_d =  torch.tensor(tensor) 
 # 
 #     ################################################################################################################
 #     'define electic_field tensor'
 #     ################################################################################################################
 #     
-#     def e(self, e0t, z, rp_at_1050):
-#         e_x = float(e0*np.cos(rp_at_1050*z))
-#         e_y = float(e0*np.sin(rp_at_1050*z))
+#     def e(self, e0t, z):
+#         e_x = float(e0*np.cos(self. theta))
+#         e_y = float(e0*np.sin(self. theta))
 #         e_z = float(0)
 #         e_xyz = torch.tensor([[e_x**2],
 #                      [e_y**2],
@@ -895,25 +915,8 @@ class simulate_travel:
 #     for i in range(number_of_steps_z):
 #         P[i] += (-1j*omega/n2*C)*integrand(i*dz)*(torch.matmul(tensor_d, e(e0, dz*i, rp_at_1050)))
 #         
-#             
-# 
-# 
-# 
-# 
-# 
-# 
 # 
 # =============================================================================
-
-
-
-
-
-
-
-
-
-
 
         
 app = QApplication(sys.argv)
