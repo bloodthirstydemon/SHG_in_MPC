@@ -47,6 +47,8 @@ class PhaseMatchingWindow(QDialog):
         
         for button in self.phase_matching_type_buttons:
             button.clicked.connect(lambda state, button=button: self.disable_other_radios(button, self.omega_1_buttons))
+        for button in self.phase_matching_type_buttons:
+            button.clicked.connect(lambda state, button=button: self.disable_other_radios(button, self.omega_1_buttons))
         
         self.label = QLabel("Phase_matching_angle:")
         self.box_input_Phase_matching_angle = pg.SpinBox(value=30)
@@ -72,9 +74,14 @@ class PhaseMatchingWindow(QDialog):
         self.close()
         
     def disable_other_radios(self, clicked_button, radio_buttons):
-        for button in radio_buttons:
-            if button is not clicked_button:
-                button.setEnabled(not clicked_button.isChecked())
+        if self.get_selected_values()["phase_matching_type"] == "Type-II":
+            for button in radio_buttons:
+                if button is not clicked_button:
+                    button.setEnabled(not clicked_button.isChecked())
+        else:
+            for button in radio_buttons:
+                if button is not clicked_button:
+                    button.setEnabled(clicked_button.isChecked())
         
     def add_radio_section(self, layout, label_text, options, default_option):
         radio_layout = QHBoxLayout()
@@ -412,7 +419,98 @@ class LBO_refractive_index:
                      (λ**2 - 0.021414) - 
                      0.016293 * λ**2)
         return nz
+#%%
+class chi_tensor_for_LBO:
+    def __init__(self):
+        
+        self.d11 = 0.3e-12
+        self.d12 = -0.3e-12
+        self.d13 = 0
+        self.d14 = 0.008e-12
+        self.d15 = 0
+        self.d16 = 0
+        self.d21 = 0
+        self.d22 = 0
+        self.d23 = 0
+        self.d24 = 0
+        self.d25 = -0.008e-12
+        self.d26 = -0.3e-12
+        self.d31 = 0
+        self.d32 = 0
+        self.d33 = 0
+        self.d34 = 0
+        self.d35 = 0
+        self.d36 = 0
+        
+        
+    def chi2_tensor(self):
+            
+        self.tensor = [[self.d11, self.d12, self.d13, self.d14, self.d15, self.d16],
+                      [self.d21, self.d22, self.d23, self.d24, self.d25, self.d26],
+                      [self.d31, self.d32, self.d33, self.d34, self.d35, self.d36]]
+        self.tensor = np.asarray(self.tensor)
+        return self.tensor
+    
+    def initial_vector(self, e0, theta, phi):
 
+         e_x = e0 *np.sin(theta) *np.cos(phi)
+         e_y = e0 *np.sin(theta) *np.sin(phi)
+         e_z = e0 *np.cos(theta)
+         return np.array([[e_x], [e_y], [e_z]])
+
+    def trick(self, plane):
+        e_x, e_y, e_z = self.initial_vector(1, np.pi/2, np.pi/2)[0][0], self.initial_vector(1, np.pi/2, np.pi/2)[1][0], self.initial_vector(1, np.pi/2, np.pi/2)[2][0]
+        if plane == 'XY':            
+            # Calculations for N2x
+            self.e_z_transformed = e_x
+        
+            # Calculations for N2y
+            self.e_y_transformed = e_y
+            
+            # Calculations for N2z
+            self.e_x_transformed = e_z
+            
+        elif plane == 'YZ':
+            # Calculations for N2x
+            self.e_x_transformed = e_x
+        
+            # Calculations for N2y
+            self.e_y_transformed = e_y
+            
+            # Calculations for N2z
+            self.e_z_transformed = e_z
+            
+        elif plane == 'ZX':
+            # Calculations for N2x
+            self.e_y_transformed = e_x
+        
+            # Calculations for N2y
+            self.e_x_transformed = e_y
+            
+            # Calculations for N2z
+            self.e_z_transformed = e_z
+            
+        return [[self.e_x_transformed], [self.e_y_transformed], [self.e_z_transformed]]
+
+    def e(self, e_0, theta, phi):
+        e_x, e_y, e_z = self.trick(plane, e_x, e_y, e_z)
+        
+        e_x = float(e0*np.cos(self.theta))
+        e_y = float(e0*np.sin(self.theta))
+        e_z = float(0)
+        e_xyz = torch.tensor([[e_x**2],
+                              [e_y**2],
+                              [e_z**2],
+                              [2*e_y*e_z],
+                              [2*e_x*e_z],
+                              [2*e_x*e_y]])
+        return e_xyz
+    
+###now use this class in propogation class at each pass to calculate polarisation
+##additionally schrodinger equation in comoving frame can be solved
+#%%
+    
+    
 class refractive_index:
     def __init__(self):
         self.N = LBO_refractive_index()
@@ -425,7 +523,7 @@ class refractive_index:
             whaichever plane we chose we keep it p polarised (to the ground).
             
             #########################
-            for yz plane keep al same,
+            for yz plane keep all same,
             for xy plane nx -->  n(γ), nz --> n(α)
             for xz plane nx -->  n(β), ny --> n(α)
             
@@ -536,11 +634,10 @@ class abcd_matrices:
               [0, 0, 0, 1]]
         return np.array(op)
     
-    
+#%%
 class simulate_travel:
-    def __init__(self, R1, R2, N, cell_length, crystal_length, crystal_position, pattern_size, λ1, p, h, xc, beam_type, plane, phase_matching_angle, phase_matching_type):
+    def __init__(self, R1, R2, N, cell_length, crystal_length, crystal_position, pattern_size, λ1, p, h, xc, pump_beam_type, plane, phase_matching_angle, phase_matching_type):
         self.λ1 = λ1
-        self.λ2 = λ1 / 2
         self.N = N  # number of bounces on one mirror
         self.R1 = R1  # radius of curvature
         self.R2 = R2
@@ -552,10 +649,14 @@ class simulate_travel:
         self.f = self.R1 / 2  # focal length
         self.M = self.N - 1  # parameter M   M=N-1 means the longest configuration
         self.pattern_size = pattern_size
-        self.beam_type = beam_type 
+        self.beam_type = pump_beam_type 
         self.plane = plane
         self.phase_matching_angle = phase_matching_angle
         self.phase_matching_type = phase_matching_type
+        
+        #second_harmonic_information
+        self.λ2 = λ1 / 2
+        #self.SH_beam_type = SH_beam_type
         
         #initial_coordinates
         
@@ -599,6 +700,7 @@ class simulate_travel:
         self.travel_data = np.zeros(shape=((self.N*4)+1, 4, 1))
         initial_matrix = self.abcd_matrices.initial_condition(self.x0, self.y0, self.xslope, self.yslope)
         self.travel_data[0] = initial_matrix
+        self.second_harmonic_beam = []
         self.polarisation_data = []
         self.relative_phase_data = []
         
@@ -608,7 +710,7 @@ class simulate_travel:
     # =============================================================================
     #       d1 travel 1
     # =============================================================================
-    
+                
             d1travel1 = self.after_d1_travel_in_air(initial_matrix)
             
     # =============================================================================
@@ -752,7 +854,7 @@ class simulate_travel:
     
     def polarisation_calculation(self, M_in):
         result = self.matrices.theta_and_phi_operator()@M_in                                         #######put your phase mathing angle here
-        x, y, theta, phi = result[0], result[1], result[2], result[3]
+        x, y, theta, phi = result[0][0], result[1][0], result[2][0], result[3][0]
         
         ''' Just a note: 
                         for ordinary beam rotation in non phase_matching plane is affective(resulting in RI change) but,
@@ -782,12 +884,11 @@ class simulate_travel:
             print('error: put beam type')
             
         print(theta_transformed, phi_transformed)
-        M_out = [[x],
-                [y],
-                [theta_transformed],
-                [phi_transformed]]
-        M_in = np.array(M_in)
-        return np.array(M_in)
+        theta_transformed = float(theta_transformed)
+        phi_transformed = float(phi_transformed)
+        M_out = [[x], [y], [theta_transformed], [phi_transformed]]
+        
+        return np.array(M_out)
     
     def calculate_refractiv_index(self, M_in):
         result = self.matrices.theta_and_phi_operator()@M_in
@@ -808,11 +909,11 @@ class simulate_travel:
         dk = calculate_refractiv_index(self, M_in, beam_type, plane)
         dpsi = dk*travel_length
 
-
+#%%
 # =============================================================================
 # class calculation_for_second_harmonic:
 #     
-#     def __init__(self, theta, phi, d):      
+#     def __init__(self, M_in, d, beam_type):      
 #         ################################################################################################################
 #         'parametrs'
 #         ################################################################################################################
@@ -820,6 +921,8 @@ class simulate_travel:
 #         
 #         '''for qrartz d11 = 0.3 (pm/V) d14 = 0.008 (pm/V)
 #         in imperical units d11 = 0.3e-12 (m/V) d14 = 0.008e-12 (m/V)'''
+#         
+#         self.M_in = self.simulate_travel.polarisation_calculation(M_in)
 #         self.theta = theta
 #         self.phi = phi
 #         self.C = const.c
@@ -827,7 +930,7 @@ class simulate_travel:
 #         self.k2 = 2*np.pi*n2/582e-9
 #         self.delta_k = k2 - 2*k1
 #         
-#         
+#         self.beam_type = beam_type
 #         self.e0 = 6140032    #V/m
 #         self.tau = 5e-9
 #         self.t = np.linspace(-5e-8, 5e-8, 10)
@@ -837,53 +940,45 @@ class simulate_travel:
 #         self.dz = z[1] - z[0]     #in mm
 #         self.x = np.linspace(0, 0, number_of_steps_z)
 #         self.y = np.linspace(0, 0, number_of_steps_z)
+#         
+#         
+#     def polarisation_calculation(self, M_in):
+#         result = self.matrices.theta_and_phi_operator()@M_in                                         #######put your phase mathing angle here
+#         x, y, theta, phi = result[0], result[1], result[2], result[3]
+#         
+#         ''' Just a note: 
+#                         for ordinary beam rotation in non phase_matching plane is affective(resulting in RI change) but,
+#                         usually not much beacuse it is close to (N*pi/2) rad on the ellipse.
+#                         for extraordinary beam rotation in phase_matching plane is affective(resulting in RI change). 
+#                         significant in this case because it is near phase matching angle.
+#         '''
+#             
+#         if self.beam_type == 'Ordinary':
+#             
+#             theta_transformed = np.pi/2
+#             phi_transformed = phi
+#             
+#         elif self.beam_type == 'Extra-ordinary':
+#             
+#             theta_transformed = np.pi/2+self.phase_matching_angle+theta
+#             phi_transformed = np.pi/2
 # 
-# 
-#         ################################################################################################################
-#         'define suceptibilty tensor'
-#         ################################################################################################################
-#         
-#         
-#         self.d11 = 0.3e-12
-#         self.d12 = -0.3e-12
-#         self.d13 = 0
-#         self.d14 = 0.008e-12
-#         self.d15 = 0
-#         self.d16 = 0
-#         self.d21 = 0
-#         self.d22 = 0
-#         self.d23 = 0
-#         self.d24 = 0
-#         self.d25 = -0.008e-12
-#         self.d26 = -0.3e-12
-#         self.d31 = 0
-#         self.d32 = 0
-#         self.d33 = 0
-#         self.d34 = 0
-#         self.d35 = 0
-#         self.d36 = 0
-#         
-#         self.tensor = ([[d11, d12, d13, d14, d15, d16],
-#                       [d21, d22, d23, d24, d25, d26],
-#                       [d31, d32, d33, d34, d35, d36]])
-#         
-#         self.tensor_d =  torch.tensor(tensor) 
+#         else:
+#             print('error: put beam type')
+#             
+#         print(theta_transformed, phi_transformed)
+#         M_out = [[x],
+#                 [y],
+#                 [theta_transformed],
+#                 [phi_transformed]]
+#         M_in = np.array(M_in)
+#         return np.array(M_in)
 # 
 #     ################################################################################################################
 #     'define electic_field tensor'
 #     ################################################################################################################
 #     
-#     def e(self, e0t, z):
-#         e_x = float(e0*np.cos(self. theta))
-#         e_y = float(e0*np.sin(self. theta))
-#         e_z = float(0)
-#         e_xyz = torch.tensor([[e_x**2],
-#                      [e_y**2],
-#                      [e_z],
-#                      [2*e_y*e_z],
-#                      [2*e_x*e_z],
-#                      [2*e_x*e_y]])
-#         return e_xyz
+# 
 # 
 #     ################################################################################################################
 #     '''Function Definitions for Laser Pulses'''
@@ -914,10 +1009,10 @@ class simulate_travel:
 #     
 #     for i in range(number_of_steps_z):
 #         P[i] += (-1j*omega/n2*C)*integrand(i*dz)*(torch.matmul(tensor_d, e(e0, dz*i, rp_at_1050)))
-#         
-# 
 # =============================================================================
+        
 
+#%%
         
 app = QApplication(sys.argv)
 window = MainWindow()
@@ -939,3 +1034,9 @@ window.close()
 # idea is good but we need correct way to store beam data so function can use it even in loop without going default  ---solved(29/04/2024)
 # may be one solution could be to load data in __init__ of silulate travel and then can be used efficiently.
 # make refracive index calculation and every function in that class wavelength dependent and the from __init__ we can use it... (Enjoy the weekend!)
+
+
+
+### write difffernet function inside the main propogation loop that will append values in each diffrerent catagoris such as relative phase and coordinates
+# 26/04/2024 update:(Notes):
+    #I have theta and phi in spherical coordinate i just need to rotate the crystal in the correct direction depending on the plane
