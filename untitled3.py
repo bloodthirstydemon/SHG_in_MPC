@@ -11,6 +11,7 @@ import math
 import scipy as sp
 import scipy.constants as const
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 from tkinter import *
 import tkinter as tk
 import pyqtgraph as pg
@@ -191,9 +192,10 @@ class MainWindow(QMainWindow):
         
         self.layout.addLayout(self.left_layout)
         
-        
+        self.Vlayout = QVBoxLayout()
         # Create a horizontal layout to hold the PlotWidgets
         self.h_layout = QHBoxLayout()
+        self.h2_layout = QHBoxLayout()
         
 
         # Create the first PlotWidget
@@ -203,9 +205,18 @@ class MainWindow(QMainWindow):
         # Create the second PlotWidget
         self.plot_widget_2 = pg.PlotWidget()
         self.h_layout.addWidget(self.plot_widget_2)
-
+        
+        #creat third plot widget
+        self.plot_widget_3 = pg.PlotWidget()
+        self.h2_layout.addWidget(self.plot_widget_3)
+        #creat fourth plot widget
+        self.plot_widget_4 = pg.PlotWidget()
+        self.h2_layout.addWidget(self.plot_widget_4)
+        
         # Add the horizontal layout to the main layout
-        self.layout.addLayout(self.h_layout)
+        self.Vlayout.addLayout(self.h_layout)
+        self.Vlayout.addLayout(self.h2_layout)
+        self.layout.addLayout(self.Vlayout)
 
 
         #actions on btns
@@ -255,15 +266,17 @@ class MainWindow(QMainWindow):
         h = float(self.box_input_h.value())
         xc = float(self.box_input_xc.value())
         phase_matching_type = self.phase_matching_settings['phase_matching_type']
-        first_mirror, second_mirror = simulate_travel(R1, R2, N, L, crystal_length, crystal_position, pattern_size,                             #cell geometry
-                                                      λ1, p, h, xc,                                                                             #air properties
-                                                      beam_type, plane, phase_matching_angle, phase_matching_type).spot_data()                  #phase_matching_settings
+        first_mirror, second_mirror, first_crystal_surface, second_crystal_surface  = simulate_travel(R1, R2, N, L, crystal_length, crystal_position, pattern_size,                             #cell geometry
+                                                                                                      λ1, p, h, xc,                                                                             #air properties
+                                                                                                      beam_type, plane, phase_matching_angle, phase_matching_type).spot_data()                  #phase_matching_settings
         
         
         if self.checkbox.isChecked():
             # Clear anz existing plots
             self.plot_widget_1.clear()
             self.plot_widget_2.clear()
+            self.plot_widget_3.clear()
+            self.plot_widget_4.clear()
             
             # Plot the first mirror spot pattern on the first PlotWidget
             self.plot_widget_1.plot(first_mirror[:,0], first_mirror[:,1], pen=None, symbol='o', symbolPen='b', symbolSize=10)
@@ -280,6 +293,24 @@ class MainWindow(QMainWindow):
             self.plot_widget_2.setLabel('left', 'y-axis in mm')
             self.plot_widget_2.setLabel('bottom', 'x-axis in mm')
             self.plot_widget_2.setTitle('Second Mirror Spot pattern')
+            
+            
+            # Plot the first mirror spot pattern on the first PlotWidget
+            self.plot_widget_3.plot(first_crystal_surface[:,0], first_crystal_surface[:,1], pen=None, symbol='o', symbolPen='b', symbolSize=10)
+            
+            # Plot the second mirror spot pattern on the second PlotWidget
+            self.plot_widget_4.plot(second_crystal_surface[:,0], second_crystal_surface[:,1], pen=None, symbol='x', symbolPen='r', symbolSize=10)
+            
+            # Set plot labels and title for the first PlotWidget
+            self.plot_widget_3.setLabel('left', 'y-axis in mm')
+            self.plot_widget_3.setLabel('bottom', 'x-axis in mm')
+            self.plot_widget_3.setTitle('First Crystal Spot pattern')
+            
+            # Set plot labels and title for the second PlotWidget
+            self.plot_widget_4.setLabel('left', 'y-axis in mm')
+            self.plot_widget_4.setLabel('bottom', 'x-axis in mm')
+            self.plot_widget_4.setTitle('Second Crystal Spot pattern')
+            
         else:
             self.plot_widget_1.clear()
             self.plot_widget_2.clear()
@@ -422,6 +453,7 @@ class LBO_refractive_index:
 #%%
 class chi_tensor_for_LBO:
     def __init__(self):
+
         
         self.d11 = 0.3e-12
         self.d12 = -0.3e-12
@@ -458,8 +490,14 @@ class chi_tensor_for_LBO:
          e_z = e0 *np.cos(theta)
          return np.array([[e_x], [e_y], [e_z]])
 
-    def trick(self, plane):
+    def axis_transformation(self, e0, theta, phi, plane):
+        
+        '''this axis transformation is supposed to be same as we do with the refractive index transformazion all the time(make sure of that!!!!)
+        we first use the spherical coordiante transform to ger ex, ey, ez and then use this axis change that we used in the refractive index trick.
+        '''
+        
         e_x, e_y, e_z = self.initial_vector(1, np.pi/2, np.pi/2)[0][0], self.initial_vector(1, np.pi/2, np.pi/2)[1][0], self.initial_vector(1, np.pi/2, np.pi/2)[2][0]
+        
         if plane == 'XY':            
             # Calculations for N2x
             self.e_z_transformed = e_x
@@ -492,13 +530,14 @@ class chi_tensor_for_LBO:
             
         return [[self.e_x_transformed], [self.e_y_transformed], [self.e_z_transformed]]
 
-    def e(self, e_0, theta, phi):
-        e_x, e_y, e_z = self.trick(plane, e_x, e_y, e_z)
+    def e(self, e_0, λ1, theta, phi):
+        λ2 = λ1/2
+        e_x, e_y, e_z = self.axis_transformation(plane, e_x, e_y, e_z)
         
         e_x = float(e0*np.cos(self.theta))
         e_y = float(e0*np.sin(self.theta))
         e_z = float(0)
-        e_xyz = torch.tensor([[e_x**2],
+        e_xyz = np.array([[e_x**2],
                               [e_y**2],
                               [e_z**2],
                               [2*e_y*e_z],
@@ -506,11 +545,87 @@ class chi_tensor_for_LBO:
                               [2*e_x*e_y]])
         return e_xyz
     
+    
+    
+    def solve_coupled_equation(self, z, n):
+        e_omega2 = ((-1*1j*omega)/(n_2w*scipy.constants.c*1000))*(self.chi2_tensor@self.e(e_0, theta, phi))
+      
+#%%
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Define the functions representing the derivatives
+def dE2dz(z, E2, E, delta_k, n2, omega, c0):
+    return -1j * omega * n2 * c0 * fE2(E2, E, delta_k)
+
+def dEdz(z, E2, E, delta_k, n, omega, c0, deff):
+    return -1j * omega * n * c0 * deff * fE(E2, E, delta_k)
+
+def fE2(E2, E, delta_k):
+    return np.conj(E) * np.exp(1j * delta_k)
+
+def fE(E2, E, delta_k):
+    return E2 * np.exp(-1j * delta_k)
+
+# Fourth-order Runge-Kutta method
+def runge_kutta_step(z, E2, E, delta_k, n2, n, omega, c0, deff, dz):
+    k1 = dz * dE2dz(z, E2, E, delta_k, n2, omega, c0)
+    l1 = dz * dEdz(z, E2, E, delta_k, n, omega, c0, deff)
+    
+    k2 = dz * dE2dz(z + dz/2, E2 + k1/2, E + l1/2, delta_k, n2, omega, c0)
+    l2 = dz * dEdz(z + dz/2, E2 + k1/2, E + l1/2, delta_k, n, omega, c0, deff)
+    
+    k3 = dz * dE2dz(z + dz/2, E2 + k2/2, E + l2/2, delta_k, n2, omega, c0)
+    l3 = dz * dEdz(z + dz/2, E2 + k2/2, E + l2/2, delta_k, n, omega, c0, deff)
+    
+    k4 = dz * dE2dz(z + dz, E2 + k3, E + l3, delta_k, n2, omega, c0)
+    l4 = dz * dEdz(z + dz, E2 + k3, E + l3, delta_k, n, omega, c0, deff)
+    
+    E2 += (k1 + 2*k2 + 2*k3 + k4) / 6
+    E += (l1 + 2*l2 + 2*l3 + l4) / 6
+    
+    return E2, E
+
+# Integration function
+def integrate(z_max, dz, E2_0, E_0, delta_k, n2, n, omega, c0, deff):
+    num_steps = int(z_max / dz)
+    z_values = np.linspace(0, z_max, num_steps)
+    
+    E2_values = np.zeros_like(z_values, dtype=np.complex128)
+    E_values = np.zeros_like(z_values, dtype=np.complex128)
+    
+    E2_values[0] = E2_0
+    E_values[0] = E_0
+    
+    for i in range(1, num_steps):
+        E2_values[i], E_values[i] = runge_kutta_step(z_values[i-1], E2_values[i-1], E_values[i-1], delta_k, n2, n, omega, c0, deff, dz)
+        
+    return z_values, E2_values, E_values
+
+# Example usage
+z_max = 10  # Maximum value of z
+dz = 0.01   # Step size
+E2_0 = np.array([1.0, 0.0, 0.0])  # Initial value of E^(2ω)
+E_0 = np.array([0, 0.0, 0.0])    # Initial value of E^(ω)
+delta_k = 0.1  # Delta k
+n2 = 1.5    # n2ω
+n = 1.5     # nω
+omega = 1.0 # ω
+c0 = 1.0    # Speed of light in vacuum
+deff = 0.1  # d_eff
+
+z_values, E2_values, E_values = integrate(z_max, dz, E2_0, E_0, delta_k, n2, n, omega, c0, deff)
+
+# Plot the results or use the data as needed
+plt.plot(z_values, np.abs(E_values)**2)
+plt.plot(z_values, np.abs(E2_values)**2)
+    
 ###now use this class in propogation class at each pass to calculate polarisation
 ##additionally schrodinger equation in comoving frame can be solved
+###runge kuttta can be solved make sure it works corrcetly and may be also try to implement it for 3d case...but first make sure to get the realn physical results
+##log out on 02/05/2024 
 #%%
-    
-    
+
 class refractive_index:
     def __init__(self):
         self.N = LBO_refractive_index()
@@ -579,8 +694,6 @@ class refractive_index:
         
         return neff
 
-
-
 class abcd_matrices:
     
     def initial_condition(self, x0, y0, xd, yd):
@@ -634,7 +747,7 @@ class abcd_matrices:
               [0, 0, 0, 1]]
         return np.array(op)
     
-#%%
+
 class simulate_travel:
     def __init__(self, R1, R2, N, cell_length, crystal_length, crystal_position, pattern_size, λ1, p, h, xc, pump_beam_type, plane, phase_matching_angle, phase_matching_type):
         self.λ1 = λ1
@@ -697,7 +810,7 @@ class simulate_travel:
     '''simiilaraly travel for the second harmonic can be defined ater the first pass, making spot pattern foir SH would help visualise the proccess!'''
 
     def propogation(self):
-        self.travel_data = np.zeros(shape=((self.N*4)+1, 4, 1))
+        self.travel_data = np.zeros(shape=((self.N*12)+1, 4, 1))
         initial_matrix = self.abcd_matrices.initial_condition(self.x0, self.y0, self.xslope, self.yslope)
         self.travel_data[0] = initial_matrix
         self.second_harmonic_beam = []
@@ -712,57 +825,62 @@ class simulate_travel:
     # =============================================================================
                 
             d1travel1 = self.after_d1_travel_in_air(initial_matrix)
-            
+            self.travel_data[i*12+1] = d1travel1
     # =============================================================================
     #       operator toextract angles and then calculate refractive index
     # =============================================================================
             
             refr1 = self.after_refraction(d1travel1, True)
+            self.travel_data[i*12+2] = refr1
             d1_crystal = self.after_dcrystal_travel(refr1)
+            self.travel_data[i*12+3] = d1_crystal
             
     # =============================================================================
     #       operator toextract angles and then calculate refractive index  
     # =============================================================================
             
             refr2 = self.after_refraction(d1_crystal, False)
-            refr2 = d1travel1
+            self.travel_data[i*12+4] = refr2
             
     # =============================================================================
     #       d2 travel 1
     # =============================================================================
     
             d2travel1 = self.after_d2_travel_in_air(refr2)
-            self.travel_data[i*4+1] = d2travel1
+            self.travel_data[i*12+5] = d2travel1
             
     # =============================================================================
     #       reflection from m2
     # =============================================================================
             
             reflected = self.after_reflection_from_m2(d2travel1)
-            self.travel_data[i*4+2] = reflected
+            self.travel_data[i*12+6] = reflected
             
     # =============================================================================
     #       travel2
     # =============================================================================
     
             d2travel2 = self.after_d2_travel_in_air(reflected)
-
+            self.travel_data[i*12+7] = d2travel2
+            
     # =============================================================================
     #       operator toextract angles and then calculate refractive index          
     # =============================================================================
     
             refr3 = self.after_refraction(d2travel2, True)
+            self.travel_data[i*12+8] = refr3
             d2_crystal = self.after_dcrystal_travel(refr3)
+            self.travel_data[i*12+9] =d2_crystal
             
     # =============================================================================
     #       operator toextract angles and then calculate refractive index      
     # =============================================================================
     
             refr4 = self.after_refraction(d2_crystal, False)
-            refr4 = d2travel2
+            self.travel_data[i*12+10] = refr4
             d1travel2 = self.after_d1_travel_in_air(refr4)
             
-            self.travel_data[i*4+3] = d1travel2
+            self.travel_data[i*12+11] = d1travel2
             
     # =============================================================================
     #       reflection from m1
@@ -772,7 +890,7 @@ class simulate_travel:
             reflected2 = self.after_reflection_from_m1(mirrortransformed)
             reflected2 = self.mirror_transformation(reflected2)
             
-            self.travel_data[i*4+4] = reflected2
+            self.travel_data[i*12+12] = reflected2
             
     # =============================================================================
     #       loop statement
@@ -798,12 +916,16 @@ class simulate_travel:
     def spot_data(self):
         first_mirror = np.zeros(shape=(self.N,2))
         second_mirror = np.zeros(shape=(self.N,2))
+        first_crystal_surface = np.zeros(shape=(self.N,2))
+        second_crystal_surface = np.zeros(shape=(self.N,2))
         
         for i in range (0, self.N):    
-            first_mirror[i] = self.travel_data[i*4,0:2,0]
-            second_mirror[i] = self.travel_data[(i*4)+2,0:2,0]
+            first_mirror[i] = self.travel_data[i*12,0:2,0]
+            second_mirror[i] = self.travel_data[(i*12)+5,0:2,0]
+            first_crystal_surface[i] = self.travel_data[(i*12)+1,0:2,0]
+            second_crystal_surface[i] = self.travel_data[(i*12)+7,0:2,0]
             
-        return first_mirror, second_mirror
+        return first_mirror, second_mirror, first_crystal_surface, second_crystal_surface
     
     # =============================================================================
     #   just for testing purposes 
@@ -909,110 +1031,201 @@ class simulate_travel:
         dk = calculate_refractiv_index(self, M_in, beam_type, plane)
         dpsi = dk*travel_length
 
-#%%
-# =============================================================================
-# class calculation_for_second_harmonic:
-#     
-#     def __init__(self, M_in, d, beam_type):      
-#         ################################################################################################################
-#         'parametrs'
-#         ################################################################################################################
-#         
-#         
-#         '''for qrartz d11 = 0.3 (pm/V) d14 = 0.008 (pm/V)
-#         in imperical units d11 = 0.3e-12 (m/V) d14 = 0.008e-12 (m/V)'''
-#         
-#         self.M_in = self.simulate_travel.polarisation_calculation(M_in)
-#         self.theta = theta
-#         self.phi = phi
-#         self.C = const.c
-#         self.k1 = 2*np.pi*n1/1064e-9
-#         self.k2 = 2*np.pi*n2/582e-9
-#         self.delta_k = k2 - 2*k1
-#         
-#         self.beam_type = beam_type
-#         self.e0 = 6140032    #V/m
-#         self.tau = 5e-9
-#         self.t = np.linspace(-5e-8, 5e-8, 10)
-#         self.omega = 2*(np.pi)*C/wl
-#         self.number_of_steps_z = 40
-#         self.z = np.linspace(0, d, number_of_steps_z)
-#         self.dz = z[1] - z[0]     #in mm
-#         self.x = np.linspace(0, 0, number_of_steps_z)
-#         self.y = np.linspace(0, 0, number_of_steps_z)
-#         
-#         
-#     def polarisation_calculation(self, M_in):
-#         result = self.matrices.theta_and_phi_operator()@M_in                                         #######put your phase mathing angle here
-#         x, y, theta, phi = result[0], result[1], result[2], result[3]
-#         
-#         ''' Just a note: 
-#                         for ordinary beam rotation in non phase_matching plane is affective(resulting in RI change) but,
-#                         usually not much beacuse it is close to (N*pi/2) rad on the ellipse.
-#                         for extraordinary beam rotation in phase_matching plane is affective(resulting in RI change). 
-#                         significant in this case because it is near phase matching angle.
-#         '''
-#             
-#         if self.beam_type == 'Ordinary':
-#             
-#             theta_transformed = np.pi/2
-#             phi_transformed = phi
-#             
-#         elif self.beam_type == 'Extra-ordinary':
-#             
-#             theta_transformed = np.pi/2+self.phase_matching_angle+theta
-#             phi_transformed = np.pi/2
-# 
-#         else:
-#             print('error: put beam type')
-#             
-#         print(theta_transformed, phi_transformed)
-#         M_out = [[x],
-#                 [y],
-#                 [theta_transformed],
-#                 [phi_transformed]]
-#         M_in = np.array(M_in)
-#         return np.array(M_in)
-# 
-#     ################################################################################################################
-#     'define electic_field tensor'
-#     ################################################################################################################
-#     
-# 
-# 
-#     ################################################################################################################
-#     '''Function Definitions for Laser Pulses'''
-#     ################################################################################################################
-#     
-#     
-#     def e0t(self, t, tau, e0, omega):
-#         """Returns the electic field envelope of a Gaussian pulse with given parameters.
-#     
-#         Args:
-#             t : time
-#             tau : Intensity FWHM pulse width
-#             E0 : peak electric field strength
-#         """
-#         sigma_t =  tau / (2*np.sqrt(2*np.log(2)))
-#         return e0 * np.exp(-t**2 / (2*sigma_t)**2)*np.sin(omega*t)
-# 
-# 
-#     ################################################################################################################
-#     'calculation'
-#     ################################################################################################################
-#     
-#     P = torch.empty(number_of_steps_z,3,1, dtype = torch.complex64)
-#     
-#     # Define the integral function
-#     def integrand(self, z):
-#         return np.exp(1j * delta_k * z)
-#     
-#     for i in range(number_of_steps_z):
-#         P[i] += (-1j*omega/n2*C)*integrand(i*dz)*(torch.matmul(tensor_d, e(e0, dz*i, rp_at_1050)))
-# =============================================================================
-        
 
-#%%
+class calculation_for_second_harmonic:
+    
+    def __init__(self, M_in, d, beam_type):      
+        ################################################################################################################
+        'parametrs'
+        ################################################################################################################
+        
+        
+        '''for qrartz d11 = 0.3 (pm/V) d14 = 0.008 (pm/V)
+        in imperical units d11 = 0.3e-12 (m/V) d14 = 0.008e-12 (m/V)'''
+        
+        self.M_in = self.simulate_travel.polarisation_calculation(M_in)
+        self.theta = theta
+        self.phi = phi
+        self.C = const.c
+        self.k1 = 2*np.pi*n1/1064e-9
+        self.k2 = 2*np.pi*n2/582e-9
+        self.delta_k = k2 - 2*k1
+        
+        self.beam_type = beam_type
+        
+        
+    def polarisation_calculation(self, M_in):
+        result = self.matrices.theta_and_phi_operator()@M_in                                         #######put your phase mathing angle here
+        x, y, theta, phi = result[0], result[1], result[2], result[3]
+        
+        ''' Just a note: 
+                        for ordinary beam rotation in non phase_matching plane is affective(resulting in RI change) but,
+                        usually not much beacuse it is close to (N*pi/2) rad on the ellipse.
+                        for extraordinary beam rotation in phase_matching plane is affective(resulting in RI change). 
+                        significant in this case because it is near phase matching angle.
+        '''
+            
+        if self.beam_type == 'Ordinary':
+            
+            theta_transformed = np.pi/2
+            phi_transformed = phi
+            
+        elif self.beam_type == 'Extra-ordinary':
+            
+            theta_transformed = np.pi/2+self.phase_matching_angle+theta
+            phi_transformed = np.pi/2
+
+        else:
+            print('error: put beam type')
+            
+        print(theta_transformed, phi_transformed)
+        M_out = [[x],
+                [y],
+                [theta_transformed],
+                [phi_transformed]]
+        M_in = np.array(M_in)
+        return np.array(M_in)
+
+
+# =============================================================================
+# ###############################################################################################################
+#     # Define the functions representing the derivatives
+#     
+#     def dE2dz(z, E2, E, delta_k, n2, λ, D):
+#         n2_inv = torch.diag(1 / torch.diagonal(n2))  # Inverted n2ω
+#         return -1j * ((2 * np.pi * n2_inv / λ) @ (D @ fE2(E, delta_k, z)))
+#     
+#     def dEdz(z, E2, E, delta_k, n, λ, D):
+#         n_inv = torch.diag(1 / torch.diagonal(n))  # Inverted nω
+#         return -1j * ((2 * np.pi * n_inv / λ) @ (D @ fE(E2, E, delta_k, z)))
+#     
+#     def fE2(E, delta_k, z):
+#         a = E[0,0] * E[0,0]
+#         b = E[1,0] * E[1,0]
+#         c = E[2,0] * E[2,0]
+#         d = 2 * E[2,0] * E[1,0]
+#         e = 2 * E[2,0] * E[0,0]
+#         f = 2 * E[0,0] * E[1,0]
+#         E2 = torch.tensor([[a], [b], [c], [d], [e], [f]], dtype=torch.complex128)
+#         return E2 * torch.exp(1j * delta_k * z)
+#     
+#     def fE(E2, E, delta_k, z):
+#         E_conj = torch.conj(E)
+#         a = E2[0,0] * E_conj[0,0]
+#         b = E2[1,0] * E_conj[1,0]
+#         c = E2[2,0] * E_conj[2,0]
+#         d = 2 * E2[2,0] * E_conj[1,0]
+#         e = 2 * E_conj[2,0] * E2[0,0]
+#         f = 2 * E2[0,0] * E_conj[1,0]
+#         E = torch.tensor([[a], [b], [c], [d], [e], [f]], dtype=torch.complex128)
+#         return E * torch.exp(-1j * delta_k * z)
+#     
+#     
+#     def runge_kutta_step(z, E2, E, delta_k, n2, n, λ, D, dz):
+#         k1_E2 = dz * dE2dz(z, E2, E, delta_k, n2, λ, D)
+#         k1_E = dz * dEdz(z, E2, E, delta_k, n, λ, D)
+#         
+#         k2_E2 = dz * dE2dz(z + dz/2, E2 + k1_E2/2, E + k1_E/2, delta_k, n2, λ, D)
+#         k2_E = dz * dEdz(z + dz/2, E2 + k1_E2/2, E + k1_E/2, delta_k, n, λ, D)
+#         
+#         k3_E2 = dz * dE2dz(z + dz/2, E2 + k2_E2/2, E + k2_E/2, delta_k, n2, λ, D)
+#         k3_E = dz * dEdz(z + dz/2, E2 + k2_E2/2, E + k2_E/2, delta_k, n, λ, D)
+#         
+#         k4_E2 = dz * dE2dz(z + dz, E2 + k3_E2, E + k3_E, delta_k, n2, λ, D)
+#         k4_E = dz * dEdz(z + dz, E2 + k3_E2, E + k3_E, delta_k, n, λ, D)
+#         
+#         E2_next = E2 + (k1_E2 + 2*k2_E2 + 2*k3_E2 + k4_E2) / 6
+#         E_next = E + (k1_E + 2*k2_E + 2*k3_E + k4_E) / 6
+#         
+#         return E2_next, E_next
+#     
+#     def integrate_rk4(z_max, dz, E2_0, E_0, delta_k, n2, n, λ, D):
+#         num_steps = int(z_max / dz)
+#         z_values = torch.linspace(0, z_max, num_steps)
+#         
+#         E2_values = [E2_0]  # Initialize as a list
+#         E_values = [E_0]    # Initialize as a list
+#         
+#         for i in range(1, num_steps):
+#             z = z_values[i-1]
+#             E2_next, E_next = runge_kutta_step(z, E2_values[i-1], E_values[i-1], delta_k, n2, n, λ, D, dz)
+#             E2_values.append(E2_next)  # Append the new values
+#             E_values.append(E_next)    # Append the new values
+#     
+#             # Energy conservation check
+#             total_energy = torch.sum(torch.abs(E_next)**2) + torch.sum(torch.abs(E2_next)**2)
+#             print(f'Step {i}, Total Energy: {total_energy}')
+#             
+#         return z_values, torch.stack(E2_values), torch.stack(E_values)
+#     
+#     # Example usage
+#     z_max = 200 # Maximum value of z in micro meter
+#     dz = 1   # Step size in micro meter
+#     λ = 1.064
+#     
+#     
+#     E_0 = torch.tensor([[0.0+0j], [0.0+0j], [100000.0+0j]], dtype=torch.complex128)    # Initial value of E^(ω)
+#     E2_0 = torch.tensor([[0+0j], [0.0+0j], [0.0+0j]], dtype=torch.complex128)  # Initial value of E^(2ω)
+#     
+#     
+#     n = torch.tensor([[1.5656+0j, 0, 0], [ 0, 1.5905+0j, 0], [0, 0, 1.6055+0j]], dtype=torch.complex128)     # nω
+#     n2 = torch.tensor([[1.5785+0j, 0, 0], [0, 1.6065+0j, 0], [0, 0, 1.6212+0j]], dtype=torch.complex128)   # n2ω
+#     delta_k = (2*np.pi/0.515)*torch.tensor([[n2[0,0]-n[0,0]], [n2[1,1]-n[1,1]], [n2[2,2]-n[2,2]], [n2[2,2]-n[1,1]], [n2[2,2]-n[0,0]], [n2[0,0]-n[1,1]]], dtype=torch.complex128)  # Delta k
+#     
+#     # =============================================================================
+#     # we only use one of the coefficients when we generate SH. so here we can specify which component we use for perticular type of phase matching.
+#     # =============================================================================
+#     
+#     D = torch.tensor([[0.0+0j, 0.0+0j, 0.0+0j, 0.0+0j, 0.0+0j, 0+0j], 
+#                       [0.0+0j, 0.0+0j, 0.0+0j, 0.0+0j, 0.0+0j, 0.0+0j], 
+#                       [1.05e-06+0j, -0.98e-06+0j, 0.05e-06+0j, 0.0+0j, 0.0+0j, 0.0+0j]], dtype=torch.complex128)
+#     
+#     z_values, E2_values, E_values = integrate_rk4(z_max, dz, E2_0, E_0, delta_k, n2, n, λ, D)
+#     
+#     # Plotting the three-dimensional E2 values
+#     
+#     plt.figure()
+#     plt.plot(z_values.numpy(), np.abs(E2_values[:,0].numpy())**2, label='SH intensity')
+#     plt.plot(z_values.numpy(), np.abs(E_values[:,0].numpy())**2, label='Fundamental intensity')
+#     plt.title('intensity of the x feld')
+#     plt.xlabel('z')
+#     plt.ylabel('I')
+#     plt.legend()
+#     plt.grid(True)
+#     
+#     plt.figure()
+#     plt.plot(z_values.numpy(), np.abs(E2_values[:,1].numpy())**2, label='SH intensity')
+#     plt.plot(z_values.numpy(), np.abs(E_values[:,1].numpy())**2, label='Fundamental intensity')
+#     plt.title('intensity of the y feld')
+#     plt.xlabel('z')
+#     plt.ylabel('I')
+#     plt.legend()
+#     plt.grid(True)
+#     
+#     plt.figure()
+#     plt.plot(z_values.numpy(), np.abs(E2_values[:,2].numpy())**2, label='SH intensity')
+#     plt.plot(z_values.numpy(), np.abs(E_values[:,2].numpy())**2, label='Fundamental intensity')
+#     plt.title('intensity of the z feld')
+#     plt.xlabel('z')
+#     plt.ylabel('I')
+#     plt.legend()
+#     plt.grid(True)
+#     
+#     plt.figure()
+#     plt.plot(z_values.numpy(), np.abs(E2_values[:,0].numpy())**2 + np.abs(E2_values[:,1].numpy())**2 + np.abs(E2_values[:,2].numpy())**2, label='SH intensity')
+#     plt.plot(z_values.numpy(), np.abs(E_values[:,0].numpy())**2 + np.abs(E_values[:,1].numpy())**2 + np.abs(E_values[:,2].numpy())**2, label='Fundamental intensity')
+#     plt.plot(z_values.numpy(), np.abs(E_values[:,0].numpy())**2 + np.abs(E_values[:,1].numpy())**2 + np.abs(E_values[:,2].numpy())**2 + np.abs(E2_values[:,0].numpy())**2 + np.abs(E2_values[:,1].numpy())**2 + np.abs(E2_values[:,2].numpy())**2, label='total intensity')
+#     plt.title('intensity of the total feld')
+#     plt.xlabel('z')
+#     plt.ylabel('I')
+#     plt.legend()
+#     plt.grid(True)
+#     
+#     plt.show()
+#         
+# 
+# =============================================================================
+
         
 app = QApplication(sys.argv)
 window = MainWindow()
