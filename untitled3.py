@@ -21,8 +21,86 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QP
                              QButtonGroup, QRadioButton)
 import sys
 
+class PulseParameters(QDialog):
+    
+    # Define a signal to emit the Gaussian pulse parameters
+    pulse_params_saved = pyqtSignal(dict)
+    
+    def __init__(self, parent=None):
+        super(PulseParameters, self).__init__(parent)
+        self.setWindowTitle("Gaussian Pulse Parameters")
+        
+        layout = QVBoxLayout()
+        
+        self.add_radio_section(layout, "laser mode:", ["CW mode", "pulsed mode"], "CW mode")
+        
+        # Pulse Amplitude
+        self.label_amp = QLabel("Pulse Amplitude:")
+        self.box_input_amp = pg.SpinBox()
+        layout.addWidget(self.label_amp)
+        layout.addWidget(self.box_input_amp)
+
+        
+        # Pulse Width
+        self.label_width = QLabel("Pulse Width:")
+        self.box_input_width = pg.SpinBox()
+        layout.addWidget(self.label_width)
+        layout.addWidget(self.box_input_width)
+        
+        # OK and Cancel buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.ok_button_clicked)
+        buttons.rejected.connect(self.close)
+        layout.addWidget(buttons)
+        
+        self.setLayout(layout)
+        
+        
+    def add_radio_section(self, layout, label_text, options, default_option):
+        radio_layout = QHBoxLayout()
+        
+        label = QLabel(label_text)
+        radio_layout.addWidget(label)
+        
+        button_group = QButtonGroup(self)
+        buttons = []
+        
+        for option in options:
+            radio_button = QRadioButton(option)
+            button_group.addButton(radio_button)
+            radio_layout.addWidget(radio_button)
+            buttons.append(radio_button)
+            
+            if option == default_option:
+                radio_button.setChecked(True)
+        
+        layout.addLayout(radio_layout)
+        return buttons
+    
+    def disable_input_boxes(self, checked):
+        self.box_input_amp.setDisabled(checked)
+        self.box_input_width.setDisabled(checked)
+            
+
+    def ok_button_clicked(self):
+        
+        pulse_params = {
+            "laser_mode": None,
+            "amplitude": None,
+            "width": None,
+            }
+        laser_mode_buttons = self.findChildren(QRadioButton)[0:2]
+        for button in laser_mode_buttons:
+            if button.isChecked():
+                pulse_params["laser_mode"] = button.text()
+        pulse_params["amplitude"] = float(self.box_input_amp.value())
+        pulse_params["width"] = float(self.box_input_width.value())
+        self.pulse_params_saved.emit(pulse_params)
+        print(pulse_params)
+        self.close()
 
 class PhaseMatchingWindow(QDialog):
+    
     
     # Define a signal to emit the phase matching settings
     phase_matching_settings_saved = pyqtSignal(dict)
@@ -72,6 +150,7 @@ class PhaseMatchingWindow(QDialog):
         # Emit the signal with the selected values
         selected_values = self.get_selected_values()
         self.phase_matching_settings_saved.emit(selected_values)
+        print(selected_values)
         self.close()
         
     def disable_other_radios(self, clicked_button, radio_buttons):
@@ -135,7 +214,7 @@ class PhaseMatchingWindow(QDialog):
                 selected_values["omega_2_polarisation"] = button.text()
         
         selected_values["phase_matching_angle"] = float(self.box_input_Phase_matching_angle.value())
-        print(selected_values)
+        
         return selected_values
 
 
@@ -145,6 +224,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Herriot Cell")
         self.phase_matching_settings = None  # Initialize phase matching settings
+        self.pulse_params = None  # Initialize Gaussian pulse parameters
         self.GUI()
         
     def GUI(self):
@@ -178,6 +258,11 @@ class MainWindow(QMainWindow):
         self.left_layout.addWidget(self.phase_matching_btn)
         self.phase_matching_btn.clicked.connect(self.show_phase_matching_window)
         
+        #button to open Pulse Parameter window
+        self.pulse_btn = QPushButton("Pulse Parameters")
+        self.left_layout.addWidget(self.pulse_btn)
+        self.pulse_btn.clicked.connect(self.show_pulse_window)
+        
         #create a checkbox for plotting
         self.checkbox = QCheckBox("view spot pattern")
         self.left_layout.addWidget(self.checkbox)
@@ -198,17 +283,18 @@ class MainWindow(QMainWindow):
         self.h2_layout = QHBoxLayout()
         
 
-        # Create the first PlotWidget
+        #Create the first PlotWidget
         self.plot_widget_1 = pg.PlotWidget()
         self.h_layout.addWidget(self.plot_widget_1)
 
-        # Create the second PlotWidget
+        #Create the second PlotWidget
         self.plot_widget_2 = pg.PlotWidget()
         self.h_layout.addWidget(self.plot_widget_2)
         
         #creat third plot widget
         self.plot_widget_3 = pg.PlotWidget()
         self.h2_layout.addWidget(self.plot_widget_3)
+        
         #creat fourth plot widget
         self.plot_widget_4 = pg.PlotWidget()
         self.h2_layout.addWidget(self.plot_widget_4)
@@ -236,6 +322,16 @@ class MainWindow(QMainWindow):
         self.phase_matching_window = PhaseMatchingWindow(self)
         self.phase_matching_window.phase_matching_settings_saved.connect(self.save_phase_matching_settings)
         self.phase_matching_window.exec_()
+        
+    def save_pulse_params(self, params):
+        # Store the Gaussian pulse parameters
+        self.pulse_params = params
+        return self.pulse_params
+        
+    def show_pulse_window(self):
+        self.pulse_window = PulseParameters(self)
+        self.pulse_window.pulse_params_saved.connect(self.save_pulse_params)
+        self.pulse_window.exec_()
         
     def create_input(self, label_text, default_value):
         # Create a label
@@ -450,7 +546,7 @@ class LBO_refractive_index:
                      (λ**2 - 0.021414) - 
                      0.016293 * λ**2)
         return nz
-#%%
+
 class chi_tensor_for_LBO:
     def __init__(self):
 
@@ -549,82 +645,8 @@ class chi_tensor_for_LBO:
     
     def solve_coupled_equation(self, z, n):
         e_omega2 = ((-1*1j*omega)/(n_2w*scipy.constants.c*1000))*(self.chi2_tensor@self.e(e_0, theta, phi))
-      
-#%%
-import numpy as np
-import matplotlib.pyplot as plt
 
-# Define the functions representing the derivatives
-def dE2dz(z, E2, E, delta_k, n2, omega, c0):
-    return -1j * omega * n2 * c0 * fE2(E2, E, delta_k)
 
-def dEdz(z, E2, E, delta_k, n, omega, c0, deff):
-    return -1j * omega * n * c0 * deff * fE(E2, E, delta_k)
-
-def fE2(E2, E, delta_k):
-    return np.conj(E) * np.exp(1j * delta_k)
-
-def fE(E2, E, delta_k):
-    return E2 * np.exp(-1j * delta_k)
-
-# Fourth-order Runge-Kutta method
-def runge_kutta_step(z, E2, E, delta_k, n2, n, omega, c0, deff, dz):
-    k1 = dz * dE2dz(z, E2, E, delta_k, n2, omega, c0)
-    l1 = dz * dEdz(z, E2, E, delta_k, n, omega, c0, deff)
-    
-    k2 = dz * dE2dz(z + dz/2, E2 + k1/2, E + l1/2, delta_k, n2, omega, c0)
-    l2 = dz * dEdz(z + dz/2, E2 + k1/2, E + l1/2, delta_k, n, omega, c0, deff)
-    
-    k3 = dz * dE2dz(z + dz/2, E2 + k2/2, E + l2/2, delta_k, n2, omega, c0)
-    l3 = dz * dEdz(z + dz/2, E2 + k2/2, E + l2/2, delta_k, n, omega, c0, deff)
-    
-    k4 = dz * dE2dz(z + dz, E2 + k3, E + l3, delta_k, n2, omega, c0)
-    l4 = dz * dEdz(z + dz, E2 + k3, E + l3, delta_k, n, omega, c0, deff)
-    
-    E2 += (k1 + 2*k2 + 2*k3 + k4) / 6
-    E += (l1 + 2*l2 + 2*l3 + l4) / 6
-    
-    return E2, E
-
-# Integration function
-def integrate(z_max, dz, E2_0, E_0, delta_k, n2, n, omega, c0, deff):
-    num_steps = int(z_max / dz)
-    z_values = np.linspace(0, z_max, num_steps)
-    
-    E2_values = np.zeros_like(z_values, dtype=np.complex128)
-    E_values = np.zeros_like(z_values, dtype=np.complex128)
-    
-    E2_values[0] = E2_0
-    E_values[0] = E_0
-    
-    for i in range(1, num_steps):
-        E2_values[i], E_values[i] = runge_kutta_step(z_values[i-1], E2_values[i-1], E_values[i-1], delta_k, n2, n, omega, c0, deff, dz)
-        
-    return z_values, E2_values, E_values
-
-# Example usage
-z_max = 10  # Maximum value of z
-dz = 0.01   # Step size
-E2_0 = np.array([1.0, 0.0, 0.0])  # Initial value of E^(2ω)
-E_0 = np.array([0, 0.0, 0.0])    # Initial value of E^(ω)
-delta_k = 0.1  # Delta k
-n2 = 1.5    # n2ω
-n = 1.5     # nω
-omega = 1.0 # ω
-c0 = 1.0    # Speed of light in vacuum
-deff = 0.1  # d_eff
-
-z_values, E2_values, E_values = integrate(z_max, dz, E2_0, E_0, delta_k, n2, n, omega, c0, deff)
-
-# Plot the results or use the data as needed
-plt.plot(z_values, np.abs(E_values)**2)
-plt.plot(z_values, np.abs(E2_values)**2)
-    
-###now use this class in propogation class at each pass to calculate polarisation
-##additionally schrodinger equation in comoving frame can be solved
-###runge kuttta can be solved make sure it works corrcetly and may be also try to implement it for 3d case...but first make sure to get the realn physical results
-##log out on 02/05/2024 
-#%%
 
 class refractive_index:
     def __init__(self):
@@ -690,7 +712,6 @@ class refractive_index:
         denominator_term2 = Nx**2 * Ny**2 * cos_θ**2
         
         neff = np.sqrt(numerator / (denominator_term1 + denominator_term2))
-        print(neff)
         
         return neff
 
@@ -802,6 +823,13 @@ class simulate_travel:
         self.abcd_matrices = abcd_matrices()
         self.propogation()
         #self.graph_pattern()
+        
+        
+        
+        self.E2_values = np.zeros((num_z_steps, num_t_steps), dtype=complex)
+        self.E_values = np.zeros((num_z_steps, num_t_steps), dtype=complex)
+        self.relative_phase_data = np.zeros((num_z_steps, num_t_steps), dtype=float)
+        self.E_values[0, :] = E_0    # here we need to replace E0 if its first bounce and if not we need to inpot the whole pulse info from previous bounce
 
 # =============================================================================
 # travel fundamental 
@@ -813,6 +841,7 @@ class simulate_travel:
         self.travel_data = np.zeros(shape=((self.N*12)+1, 4, 1))
         initial_matrix = self.abcd_matrices.initial_condition(self.x0, self.y0, self.xslope, self.yslope)
         self.travel_data[0] = initial_matrix
+        self.fundamental_beam = []
         self.second_harmonic_beam = []
         self.polarisation_data = []
         self.relative_phase_data = []
@@ -964,7 +993,6 @@ class simulate_travel:
     def after_refraction(self, M_in, bool):         #if bool = true {air to crystal} else {crystal to air}
         polarisation = self.polarisation_calculation(M_in)
         self.neff = self.calculate_refractiv_index(polarisation)[0]                           #[0] to deal with the dimentions only
-        print(self.neff)
         return self.matrices.matrix_for_refraction(bool, self.n_air_at_p, self.neff, self.n_air_at_p, self.neff) @ M_in
     
     
@@ -1005,7 +1033,6 @@ class simulate_travel:
         else:
             print('error: put beam type')
             
-        print(theta_transformed, phi_transformed)
         theta_transformed = float(theta_transformed)
         phi_transformed = float(phi_transformed)
         M_out = [[x], [y], [theta_transformed], [phi_transformed]]
@@ -1030,203 +1057,159 @@ class simulate_travel:
         travel_length = d*np.sqrt((1/np.cos(theta)**2)+(1/np.cos(phi)**2))
         dk = calculate_refractiv_index(self, M_in, beam_type, plane)
         dpsi = dk*travel_length
+        
+# =============================================================================
+#         from here starts the calculation for conversion at each bounce
+# =============================================================================
 
 
-class calculation_for_second_harmonic:
+
+    ################################################################################################################
+    'parametrs'
     
-    def __init__(self, M_in, d, beam_type):      
-        ################################################################################################################
-        'parametrs'
-        ################################################################################################################
-        
-        
-        '''for qrartz d11 = 0.3 (pm/V) d14 = 0.008 (pm/V)
-        in imperical units d11 = 0.3e-12 (m/V) d14 = 0.008e-12 (m/V)'''
-        
-        self.M_in = self.simulate_travel.polarisation_calculation(M_in)
-        self.theta = theta
-        self.phi = phi
-        self.C = const.c
-        self.k1 = 2*np.pi*n1/1064e-9
-        self.k2 = 2*np.pi*n2/582e-9
-        self.delta_k = k2 - 2*k1
-        
-        self.beam_type = beam_type
-        
-        
-    def polarisation_calculation(self, M_in):
-        result = self.matrices.theta_and_phi_operator()@M_in                                         #######put your phase mathing angle here
-        x, y, theta, phi = result[0], result[1], result[2], result[3]
-        
-        ''' Just a note: 
-                        for ordinary beam rotation in non phase_matching plane is affective(resulting in RI change) but,
-                        usually not much beacuse it is close to (N*pi/2) rad on the ellipse.
-                        for extraordinary beam rotation in phase_matching plane is affective(resulting in RI change). 
-                        significant in this case because it is near phase matching angle.
-        '''
-            
-        if self.beam_type == 'Ordinary':
-            
-            theta_transformed = np.pi/2
-            phi_transformed = phi
-            
-        elif self.beam_type == 'Extra-ordinary':
-            
-            theta_transformed = np.pi/2+self.phase_matching_angle+theta
-            phi_transformed = np.pi/2
-
-        else:
-            print('error: put beam type')
-            
-        print(theta_transformed, phi_transformed)
-        M_out = [[x],
-                [y],
-                [theta_transformed],
-                [phi_transformed]]
-        M_in = np.array(M_in)
-        return np.array(M_in)
+    ################################################################################################################
+    
+    
+    '''for qrartz d11 = 0.3 (pm/V) d14 = 0.008 (pm/V)
+    in imperical units d11 = 0.3e-12 (m/V) d14 = 0.008e-12 (m/V)'''
+    
+    self.M_in = self.simulate_travel.polarisation_calculation(M_in)
+    self.theta = theta
+    self.phi = phi
+    self.C = const.c
+    self.k1 = 2*np.pi*n1/1064e-9
+    self.k2 = 2*np.pi*n2/532e-9
+    self.delta_k = k2 - 2*k1
+    
+    self.beam_type = beam_type
 
 
-# =============================================================================
-# ###############################################################################################################
-#     # Define the functions representing the derivatives
-#     
-#     def dE2dz(z, E2, E, delta_k, n2, λ, D):
-#         n2_inv = torch.diag(1 / torch.diagonal(n2))  # Inverted n2ω
-#         return -1j * ((2 * np.pi * n2_inv / λ) @ (D @ fE2(E, delta_k, z)))
-#     
-#     def dEdz(z, E2, E, delta_k, n, λ, D):
-#         n_inv = torch.diag(1 / torch.diagonal(n))  # Inverted nω
-#         return -1j * ((2 * np.pi * n_inv / λ) @ (D @ fE(E2, E, delta_k, z)))
-#     
-#     def fE2(E, delta_k, z):
-#         a = E[0,0] * E[0,0]
-#         b = E[1,0] * E[1,0]
-#         c = E[2,0] * E[2,0]
-#         d = 2 * E[2,0] * E[1,0]
-#         e = 2 * E[2,0] * E[0,0]
-#         f = 2 * E[0,0] * E[1,0]
-#         E2 = torch.tensor([[a], [b], [c], [d], [e], [f]], dtype=torch.complex128)
-#         return E2 * torch.exp(1j * delta_k * z)
-#     
-#     def fE(E2, E, delta_k, z):
-#         E_conj = torch.conj(E)
-#         a = E2[0,0] * E_conj[0,0]
-#         b = E2[1,0] * E_conj[1,0]
-#         c = E2[2,0] * E_conj[2,0]
-#         d = 2 * E2[2,0] * E_conj[1,0]
-#         e = 2 * E_conj[2,0] * E2[0,0]
-#         f = 2 * E2[0,0] * E_conj[1,0]
-#         E = torch.tensor([[a], [b], [c], [d], [e], [f]], dtype=torch.complex128)
-#         return E * torch.exp(-1j * delta_k * z)
-#     
-#     
-#     def runge_kutta_step(z, E2, E, delta_k, n2, n, λ, D, dz):
-#         k1_E2 = dz * dE2dz(z, E2, E, delta_k, n2, λ, D)
-#         k1_E = dz * dEdz(z, E2, E, delta_k, n, λ, D)
-#         
-#         k2_E2 = dz * dE2dz(z + dz/2, E2 + k1_E2/2, E + k1_E/2, delta_k, n2, λ, D)
-#         k2_E = dz * dEdz(z + dz/2, E2 + k1_E2/2, E + k1_E/2, delta_k, n, λ, D)
-#         
-#         k3_E2 = dz * dE2dz(z + dz/2, E2 + k2_E2/2, E + k2_E/2, delta_k, n2, λ, D)
-#         k3_E = dz * dEdz(z + dz/2, E2 + k2_E2/2, E + k2_E/2, delta_k, n, λ, D)
-#         
-#         k4_E2 = dz * dE2dz(z + dz, E2 + k3_E2, E + k3_E, delta_k, n2, λ, D)
-#         k4_E = dz * dEdz(z + dz, E2 + k3_E2, E + k3_E, delta_k, n, λ, D)
-#         
-#         E2_next = E2 + (k1_E2 + 2*k2_E2 + 2*k3_E2 + k4_E2) / 6
-#         E_next = E + (k1_E + 2*k2_E + 2*k3_E + k4_E) / 6
-#         
-#         return E2_next, E_next
-#     
-#     def integrate_rk4(z_max, dz, E2_0, E_0, delta_k, n2, n, λ, D):
-#         num_steps = int(z_max / dz)
-#         z_values = torch.linspace(0, z_max, num_steps)
-#         
-#         E2_values = [E2_0]  # Initialize as a list
-#         E_values = [E_0]    # Initialize as a list
-#         
-#         for i in range(1, num_steps):
-#             z = z_values[i-1]
-#             E2_next, E_next = runge_kutta_step(z, E2_values[i-1], E_values[i-1], delta_k, n2, n, λ, D, dz)
-#             E2_values.append(E2_next)  # Append the new values
-#             E_values.append(E_next)    # Append the new values
-#     
-#             # Energy conservation check
-#             total_energy = torch.sum(torch.abs(E_next)**2) + torch.sum(torch.abs(E2_next)**2)
-#             print(f'Step {i}, Total Energy: {total_energy}')
-#             
-#         return z_values, torch.stack(E2_values), torch.stack(E_values)
-#     
-#     # Example usage
-#     z_max = 200 # Maximum value of z in micro meter
-#     dz = 1   # Step size in micro meter
-#     λ = 1.064
-#     
-#     
-#     E_0 = torch.tensor([[0.0+0j], [0.0+0j], [100000.0+0j]], dtype=torch.complex128)    # Initial value of E^(ω)
-#     E2_0 = torch.tensor([[0+0j], [0.0+0j], [0.0+0j]], dtype=torch.complex128)  # Initial value of E^(2ω)
-#     
-#     
-#     n = torch.tensor([[1.5656+0j, 0, 0], [ 0, 1.5905+0j, 0], [0, 0, 1.6055+0j]], dtype=torch.complex128)     # nω
-#     n2 = torch.tensor([[1.5785+0j, 0, 0], [0, 1.6065+0j, 0], [0, 0, 1.6212+0j]], dtype=torch.complex128)   # n2ω
-#     delta_k = (2*np.pi/0.515)*torch.tensor([[n2[0,0]-n[0,0]], [n2[1,1]-n[1,1]], [n2[2,2]-n[2,2]], [n2[2,2]-n[1,1]], [n2[2,2]-n[0,0]], [n2[0,0]-n[1,1]]], dtype=torch.complex128)  # Delta k
-#     
-#     # =============================================================================
-#     # we only use one of the coefficients when we generate SH. so here we can specify which component we use for perticular type of phase matching.
-#     # =============================================================================
-#     
-#     D = torch.tensor([[0.0+0j, 0.0+0j, 0.0+0j, 0.0+0j, 0.0+0j, 0+0j], 
-#                       [0.0+0j, 0.0+0j, 0.0+0j, 0.0+0j, 0.0+0j, 0.0+0j], 
-#                       [1.05e-06+0j, -0.98e-06+0j, 0.05e-06+0j, 0.0+0j, 0.0+0j, 0.0+0j]], dtype=torch.complex128)
-#     
-#     z_values, E2_values, E_values = integrate_rk4(z_max, dz, E2_0, E_0, delta_k, n2, n, λ, D)
-#     
-#     # Plotting the three-dimensional E2 values
-#     
-#     plt.figure()
-#     plt.plot(z_values.numpy(), np.abs(E2_values[:,0].numpy())**2, label='SH intensity')
-#     plt.plot(z_values.numpy(), np.abs(E_values[:,0].numpy())**2, label='Fundamental intensity')
-#     plt.title('intensity of the x feld')
-#     plt.xlabel('z')
-#     plt.ylabel('I')
-#     plt.legend()
-#     plt.grid(True)
-#     
-#     plt.figure()
-#     plt.plot(z_values.numpy(), np.abs(E2_values[:,1].numpy())**2, label='SH intensity')
-#     plt.plot(z_values.numpy(), np.abs(E_values[:,1].numpy())**2, label='Fundamental intensity')
-#     plt.title('intensity of the y feld')
-#     plt.xlabel('z')
-#     plt.ylabel('I')
-#     plt.legend()
-#     plt.grid(True)
-#     
-#     plt.figure()
-#     plt.plot(z_values.numpy(), np.abs(E2_values[:,2].numpy())**2, label='SH intensity')
-#     plt.plot(z_values.numpy(), np.abs(E_values[:,2].numpy())**2, label='Fundamental intensity')
-#     plt.title('intensity of the z feld')
-#     plt.xlabel('z')
-#     plt.ylabel('I')
-#     plt.legend()
-#     plt.grid(True)
-#     
-#     plt.figure()
-#     plt.plot(z_values.numpy(), np.abs(E2_values[:,0].numpy())**2 + np.abs(E2_values[:,1].numpy())**2 + np.abs(E2_values[:,2].numpy())**2, label='SH intensity')
-#     plt.plot(z_values.numpy(), np.abs(E_values[:,0].numpy())**2 + np.abs(E_values[:,1].numpy())**2 + np.abs(E_values[:,2].numpy())**2, label='Fundamental intensity')
-#     plt.plot(z_values.numpy(), np.abs(E_values[:,0].numpy())**2 + np.abs(E_values[:,1].numpy())**2 + np.abs(E_values[:,2].numpy())**2 + np.abs(E2_values[:,0].numpy())**2 + np.abs(E2_values[:,1].numpy())**2 + np.abs(E2_values[:,2].numpy())**2, label='total intensity')
-#     plt.title('intensity of the total feld')
-#     plt.xlabel('z')
-#     plt.ylabel('I')
-#     plt.legend()
-#     plt.grid(True)
-#     
-#     plt.show()
-#         
-# 
-# =============================================================================
+    def dE2dz(z, E, delta_k, n2, λ, D):
+        return -1j * ((2 * np.pi / λ * n2) * (D * fE2(E, delta_k, z)))
 
+    def dEdz(z, E2, E, delta_k, n, λ, D):
+        return -1j * ((2 * np.pi / λ * n) * (D * fE(E2, E, delta_k, z)))
+
+    def fE2(E, delta_k, z):
+        return E**2 * np.exp(1j * delta_k * z)
+
+    def fE(E2, E, delta_k, z):
+        E21 = E2 * np.conj(E)
+        return E21 * np.exp(-1j * delta_k * z)
+
+    def runge_kutta_step(z, E2, E, delta_k, n2, n, λ, D, dz):
+        k1_E2 = dz * dE2dz(z, E, delta_k, n2, λ, D)
+        k1_E = dz * dEdz(z, E2, E, delta_k, n, λ, D)
         
+        k2_E2 = dz * dE2dz(z + dz/2, E + k1_E/2, delta_k, n2, λ, D)
+        k2_E = dz * dEdz(z + dz/2, E2 + k1_E2/2, E + k1_E/2, delta_k, n, λ, D)
+        
+        k3_E2 = dz * dE2dz(z + dz/2, E + k2_E/2, delta_k, n2, λ, D)
+        k3_E = dz * dEdz(z + dz/2, E2 + k2_E2/2, E + k2_E/2, delta_k, n, λ, D)
+        
+        k4_E2 = dz * dE2dz(z + dz, E + k3_E, delta_k, n2, λ, D)
+        k4_E = dz * dEdz(z + dz, E2 + k3_E2, E + k3_E, delta_k, n, λ, D)
+        
+        E2_next = E2 + (k1_E2 + 2*k2_E2 + 2*k3_E2 + k4_E2) / 6
+        E_next = E + (k1_E + 2*k2_E + 2*k3_E + k4_E) / 6
+        
+        relative_phase = delta_k * z
+        
+        return E2_next, E_next, relative_phase
+
+    def gaussian_pulse(t, t0, width, amplitude, omega):
+        envelope = amplitude * np.exp(-(t - t0)**2 / (2 * width**2))
+        pulse = envelope * np.exp(1j*omega*t)
+        CW_wave = amplitude * np.exp(1j*omega*t)
+        return CW_wave#pulse
+
+    def integrate_rk4(z_max, dz, t_max, dt, E2_0, E_0, delta_k, n2, n, λ, D):
+        num_z_steps = int(z_max / dz)
+        num_t_steps = int(t_max / dt)
+        
+        z_values = np.linspace(0, z_max, num_z_steps)
+        t_values = np.linspace(-t_max/2, t_max/2, num_t_steps)
+        
+        E2_values = np.zeros((num_z_steps, num_t_steps), dtype=complex)
+        E_values = np.zeros((num_z_steps, num_t_steps), dtype=complex)
+        relative_phase_data = np.zeros((num_z_steps, num_t_steps), dtype=float)
+        E_values[0, :] = E_0
+        
+        for i in range(1, num_z_steps):
+            for j in range(num_t_steps):
+                z = z_values[i-1]
+                E2_next, E_next, relative_phase = runge_kutta_step(z, E2_values[i-1, j], E_values[i-1, j], delta_k, n2, n, λ, D, dz)
+                E2_values[i, j] = E2_next
+                E_values[i, j] = E_next
+                relative_phase_data[i, j] = relative_phase
+            total_energy = np.sum(np.abs(E_values[i, :])**2 + np.abs(E2_values[i, :])**2)
+            print(f'Step {i}, Total Energy: {total_energy}')
+        
+        return z_values, t_values, E2_values, E_values, relative_phase_data
+
+
+    # Example usage
+    z_max = 1000.0  # Maximum value of z in micrometers
+    dz = 0.1  # Step size in micrometers
+    t_max = 10   # Temporal window in picoseconds
+    dt = 0.1     # Temporal step size in picoseconds
+    λ = 1.064    # Wavelength in micrometers
+    omega = 2*np.pi*299792458e-6/1.064
+    E_0_amplitude = 40.0e-02  # volts/micrometer
+    E_0_width = 2.0  # Pulse width in picoseconds
+    E_0_t0 = 0.0     # Pulse center in picoseconds
+    E_0 = gaussian_pulse(np.linspace(-t_max/2, t_max/2, int(t_max/dt)), E_0_t0, E_0_width, E_0_amplitude, omega)
+    E2_0 = np.zeros_like(E_0)
+
+    n = 1.565
+    
+    n2 = 1.5656#1.5785 + 0j
+    delta_k = (2 * np.pi / 0.515) * (n2 - n)
+
+    D = 0.85e-06#0.85e-06
+
+    z_values, t_values, E2_values, E_values, relative_phase_data = integrate_rk4(z_max, dz, t_max, dt, E2_0, E_0, delta_k, n2, n, λ, D)
+
+    # Plotting
+    plt.figure(figsize=(12, 6))
+
+    plt.subplot(2, 3, 1)
+    plt.imshow(np.abs(E_values)**2, aspect='auto', extent=[t_values.min(), t_values.max(), z_values.min(), z_values.max()], origin='lower')
+    plt.colorbar(label='Intensity')
+    plt.title('Fundamental Pulse Evolution')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('Propagation distance (µm)')
+
+    plt.subplot(2, 3, 2)
+    plt.imshow(np.abs(E2_values)**2, aspect='auto', extent=[t_values.min(), t_values.max(), z_values.min(), z_values.max()], origin='lower')
+    plt.colorbar(label='Intensity')
+    plt.title('Second Harmonic Pulse Evolution')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('Propagation distance (µm)')
+
+    plt.subplot(2, 3, 3)
+    plt.imshow(relative_phase_data, aspect='auto', extent=[t_values.min(), t_values.max(), z_values.min(), z_values.max()], origin='lower')
+    plt.colorbar(label='relative phase in rad')
+    plt.title('phase of Pulse Evolution')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('Propagation distance (µm)')
+
+    plt.subplot(2, 3, 4)
+    plt.plot(np.linspace(0, t_max, 100), np.abs(E_0)**2)
+    plt.title('Pulse envelope shape')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('intensity')
+
+    plt.subplot(2, 3, 5)
+    plt.plot(np.linspace(0, t_max, 100), E_0.real)
+    plt.title('electric field')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('electric field')
+
+    plt.tight_layout()
+    plt.show()
+    
+    
 app = QApplication(sys.argv)
 window = MainWindow()
 window.show()
