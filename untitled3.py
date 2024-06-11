@@ -348,6 +348,7 @@ class MainWindow(QMainWindow):
         
     def calculate_btn_clicked(self):
         beam_type = self.phase_matching_settings['pump_beam_polarisation']
+        SH_beam_type = self.phase_matching_settings["omega_2_polarisation"]
         plane = self.phase_matching_settings['phase_matching_plane']
         phase_matching_angle = self.phase_matching_settings["phase_matching_angle"]
         R1 = float(self.box_input_R1.value())
@@ -364,7 +365,7 @@ class MainWindow(QMainWindow):
         phase_matching_type = self.phase_matching_settings['phase_matching_type']
         first_mirror, second_mirror, first_crystal_surface, second_crystal_surface  = simulate_travel(R1, R2, N, L, crystal_length, crystal_position, pattern_size,                             #cell geometry
                                                                                                       λ1, p, h, xc,                                                                             #air properties
-                                                                                                      beam_type, plane, phase_matching_angle, phase_matching_type).spot_data()                  #phase_matching_settings
+                                                                                                      beam_type, SH_beam_type, plane, phase_matching_angle, phase_matching_type).spot_data()                  #phase_matching_settings
         
         
         if self.checkbox.isChecked():
@@ -770,7 +771,7 @@ class abcd_matrices:
     
 
 class simulate_travel:
-    def __init__(self, R1, R2, N, cell_length, crystal_length, crystal_position, pattern_size, λ1, p, h, xc, pump_beam_type, plane, phase_matching_angle, phase_matching_type):
+    def __init__(self, R1, R2, N, cell_length, crystal_length, crystal_position, pattern_size, λ1, p, h, xc, pump_beam_type, SH_beam_type, plane, phase_matching_angle, phase_matching_type):
         self.λ1 = λ1
         self.N = N  # number of bounces on one mirror
         self.R1 = R1  # radius of curvature
@@ -783,14 +784,17 @@ class simulate_travel:
         self.f = self.R1 / 2  # focal length
         self.M = self.N - 1  # parameter M   M=N-1 means the longest configuration
         self.pattern_size = pattern_size
-        self.beam_type = pump_beam_type 
+        
+        self.pump_beam_type = pump_beam_type 
+        self.SH_beam_type = SH_beam_type
+        
         self.plane = plane
         self.phase_matching_angle = phase_matching_angle
         self.phase_matching_type = phase_matching_type
         
         #second_harmonic_information
-        self.λ2 = λ1 / 2
-        #self.SH_beam_type = SH_beam_type
+        self.λ2 = self.λ1 / 2
+        self.omega = 2*np.pi*299792458e-6/self.λ1
         
         #initial_coordinates
         
@@ -813,6 +817,23 @@ class simulate_travel:
         self.M_f1m = self.matrices.matrix_for_reflection(self.R1)
         self.M_f2m = self.matrices.matrix_for_reflection(self.R2)
         
+
+        self.t_max = 10   # Temporal window in picoseconds
+        self.num_z_steps = 100
+        self.num_t_steps = 100
+        self.dt = self.t_max/self.num_t_steps
+        self.E_0_amplitude = 40.0e-02  # volts/micrometer
+        self.E_0_width = 2.0  # Pulse width in picoseconds
+        self.E_0_t0 = 0.0     # Pulse center in picoseconds
+        self.E_0 = self.gaussian_pulse(np.linspace(-self.t_max/2, self.t_max/2, int(self.t_max/self.dt)), self.E_0_t0, self.E_0_width, self.E_0_amplitude, self.omega)
+        self.E2_0 = np.zeros_like(self.E_0)
+        self.E2_values = np.zeros((self.N*2, self.num_z_steps, self.num_t_steps), dtype=complex)
+        self.E_values = np.zeros((self.N*2, self.num_z_steps, self.num_t_steps), dtype=complex)
+        self.z_values = np.zeros((self.N*2, self.num_z_steps), dtype=complex)
+        self.t_values = np.zeros((self.N*2, self.num_t_steps), dtype=complex)
+        self.relative_phase_data = np.zeros((self.N*2, self.num_z_steps, self.num_t_steps), dtype=float)
+        
+        
         
         self.n_air_p = Air_refractive_index()
         self.n_air_at_p = self.n_air_p.n(λ1, p, h, xc)
@@ -823,13 +844,7 @@ class simulate_travel:
         self.abcd_matrices = abcd_matrices()
         self.propogation()
         #self.graph_pattern()
-        
-        
-        
-        self.E2_values = np.zeros((num_z_steps, num_t_steps), dtype=complex)
-        self.E_values = np.zeros((num_z_steps, num_t_steps), dtype=complex)
-        self.relative_phase_data = np.zeros((num_z_steps, num_t_steps), dtype=float)
-        self.E_values[0, :] = E_0    # here we need to replace E0 if its first bounce and if not we need to inpot the whole pulse info from previous bounce
+        self.plot_results(self.z_values, self.t_values, self.E2_values, self.E_values, self.relative_phase_data)
 
 # =============================================================================
 # travel fundamental 
@@ -841,11 +856,7 @@ class simulate_travel:
         self.travel_data = np.zeros(shape=((self.N*12)+1, 4, 1))
         initial_matrix = self.abcd_matrices.initial_condition(self.x0, self.y0, self.xslope, self.yslope)
         self.travel_data[0] = initial_matrix
-        self.fundamental_beam = []
-        self.second_harmonic_beam = []
-        self.polarisation_data = []
-        self.relative_phase_data = []
-        
+        D = 0.85e-06#0.85e-06
 
         for i in range(0, self.N):
             
@@ -859,8 +870,11 @@ class simulate_travel:
     #       operator toextract angles and then calculate refractive index
     # =============================================================================
             
-            refr1 = self.after_refraction(d1travel1, True)
+            refr1 = self.after_refraction(d1travel1, True, self.λ1, self.pump_beam_type)
             self.travel_data[i*12+2] = refr1
+            
+            self.integrate_rk4(refr1, self.crystal_length, self.num_z_steps, self.t_max, self.num_t_steps, self.E2_0, self.E_0, self.λ1, self.λ2, D, self.pump_beam_type, self.SH_beam_type, 2*i)
+            
             d1_crystal = self.after_dcrystal_travel(refr1)
             self.travel_data[i*12+3] = d1_crystal
             
@@ -868,7 +882,7 @@ class simulate_travel:
     #       operator toextract angles and then calculate refractive index  
     # =============================================================================
             
-            refr2 = self.after_refraction(d1_crystal, False)
+            refr2 = self.after_refraction(d1_crystal, False, self.λ1, self.pump_beam_type)
             self.travel_data[i*12+4] = refr2
             
     # =============================================================================
@@ -886,7 +900,7 @@ class simulate_travel:
             self.travel_data[i*12+6] = reflected
             
     # =============================================================================
-    #       travel2
+    #       d2 travel2
     # =============================================================================
     
             d2travel2 = self.after_d2_travel_in_air(reflected)
@@ -896,8 +910,11 @@ class simulate_travel:
     #       operator toextract angles and then calculate refractive index          
     # =============================================================================
     
-            refr3 = self.after_refraction(d2travel2, True)
+            refr3 = self.after_refraction(d2travel2, True, self.λ1, self.pump_beam_type)
             self.travel_data[i*12+8] = refr3
+            
+            self.integrate_rk4(refr3, self.crystal_length, self.num_z_steps, self.t_max, self.num_t_steps, self.E2_0, self.E_0, self.λ1, self.λ2, D, self.pump_beam_type, self.SH_beam_type, 1+(i*2))
+            
             d2_crystal = self.after_dcrystal_travel(refr3)
             self.travel_data[i*12+9] =d2_crystal
             
@@ -905,7 +922,7 @@ class simulate_travel:
     #       operator toextract angles and then calculate refractive index      
     # =============================================================================
     
-            refr4 = self.after_refraction(d2_crystal, False)
+            refr4 = self.after_refraction(d2_crystal, False, self.λ1, self.pump_beam_type)
             self.travel_data[i*12+10] = refr4
             d1travel2 = self.after_d1_travel_in_air(refr4)
             
@@ -990,9 +1007,9 @@ class simulate_travel:
     def mirror_transformation(self, M_in):
         return self.M_mrr @ M_in
     
-    def after_refraction(self, M_in, bool):         #if bool = true {air to crystal} else {crystal to air}
-        polarisation = self.polarisation_calculation(M_in)
-        self.neff = self.calculate_refractiv_index(polarisation)[0]                           #[0] to deal with the dimentions only
+    def after_refraction(self, M_in, bool, λ, beam_type):         #if bool = true {air to crystal} else {crystal to air}
+        polarisation = self.polarisation_calculation(M_in, beam_type)
+        self.neff = self.calculate_refractiv_index(polarisation, λ)[0]                           #[0] to deal with the dimentions only
         return self.matrices.matrix_for_refraction(bool, self.n_air_at_p, self.neff, self.n_air_at_p, self.neff) @ M_in
     
     
@@ -1002,7 +1019,7 @@ class simulate_travel:
 
     '''refractive index calculation depending on theta, phi, type of beam'''
     
-    def polarisation_calculation(self, M_in):
+    def polarisation_calculation(self, M_in, beam_type):
         result = self.matrices.theta_and_phi_operator()@M_in                                         #######put your phase mathing angle here
         x, y, theta, phi = result[0][0], result[1][0], result[2][0], result[3][0]
         
@@ -1015,12 +1032,12 @@ class simulate_travel:
         
         if self.phase_matching_type == 'Type-I':
             
-            if self.beam_type == 'Ordinary':
+            if beam_type == 'Ordinary':
                 
                 theta_transformed = np.pi/2
                 phi_transformed = phi
                 
-            elif self.beam_type == 'Extra-ordinary':
+            elif beam_type == 'Extra-ordinary':
                 
                 theta_transformed = np.pi/2+self.phase_matching_angle+theta
                 phi_transformed = np.pi/2
@@ -1039,13 +1056,13 @@ class simulate_travel:
         
         return np.array(M_out)
     
-    def calculate_refractiv_index(self, M_in):
+    def calculate_refractiv_index(self, M_in, λ):
         result = self.matrices.theta_and_phi_operator()@M_in
         theta_transformed, phi_transformed = result[2], result[3]
         
         '''here we use a trick to transofrm the cell system to the crystal system just by replacing nx and ny 
         (rotating the elipsoid instead of coordinate system whichis esssentially the same)'''
-        n = self.refractive_index.calculate_neff(self.λ1, self.plane, theta_transformed, phi_transformed)
+        n = self.refractive_index.calculate_neff(λ, self.plane, theta_transformed, phi_transformed)
         
         return n
     # =============================================================================
@@ -1061,54 +1078,83 @@ class simulate_travel:
 # =============================================================================
 #         from here starts the calculation for conversion at each bounce
 # =============================================================================
-
-
-
-    ################################################################################################################
-    'parametrs'
+    def actual_distance_in_crystal(self, M_in, d):
+        result = self.matrices.theta_and_phi_operator()@M_in                                         #######put your phase mathing angle here
+        x, y, theta, phi = result[0][0], result[1][0], result[2][0], result[3][0]
+        d_actual = d * (np.sqrt((1/np.cos(theta))+(1/np.cos(phi))))
+        return d_actual
     
-    ################################################################################################################
-    
-    
-    '''for qrartz d11 = 0.3 (pm/V) d14 = 0.008 (pm/V)
-    in imperical units d11 = 0.3e-12 (m/V) d14 = 0.008e-12 (m/V)'''
-    
-    self.M_in = self.simulate_travel.polarisation_calculation(M_in)
-    self.theta = theta
-    self.phi = phi
-    self.C = const.c
-    self.k1 = 2*np.pi*n1/1064e-9
-    self.k2 = 2*np.pi*n2/532e-9
-    self.delta_k = k2 - 2*k1
-    
-    self.beam_type = beam_type
+        # we have to use this function inside the propogation loop so all the parameters should be calculated inside this function definition    
+    def integrate_rk4(self, M_in, d, num_z_steps, t_max, num_t_steps, E2_0, E_0, λ1, λ2, D, beam_type, SH_beam_type, pass_num):
+        
+        z_max = self.actual_distance_in_crystal(M_in, d)*1000
+        polarisation1 = self.polarisation_calculation(M_in, beam_type)
+        n1 = self.calculate_refractiv_index(polarisation1, λ1)[0]                           #[0] to deal with the dimentions only
+        polarisation2 = self.polarisation_calculation(M_in, SH_beam_type)
+        n2 = self.calculate_refractiv_index(polarisation2, λ2)[0]                           #[0] to deal with the dimentions only
+        print(n1, n2)
+        
+        k1 = 2*np.pi*n1/λ1
+        k2 = 2*np.pi*n2/λ2
+
+        print(λ1)
+        print(λ2)
+        delta_k = k2 - 2*k1
+        print(delta_k)
+        delta_k0 = 0
+        dz = (z_max / num_z_steps)
+        dt = int(self.t_max / num_t_steps)
+        
+        z_values = np.linspace(0, z_max, num_z_steps)
+        self.z_values[pass_num, : ] = z_values
+        t_values = np.linspace(-self.t_max/2, self.t_max/2, num_t_steps)
+        self.t_values[pass_num, : ] = t_values
+        
+        if pass_num == 0:
+            self.E_values[0, 0, :] = E_0
+            self.E2_values[0, 0, :] = E2_0
+        else:
+            self.E_values[pass_num, 0, :] = self.E_values[pass_num-1, -1, :]
+            self.E2_values[pass_num, 0, :] = self.E2_values[pass_num-1, -1, :]
+        
+        for i in range(1, num_z_steps):
+            for j in range(num_t_steps):
+                z = z_values[i-1]
+                E2_next, E_next, relative_phase = self.runge_kutta_step(z, self.E2_values[pass_num, i-1, j], self.E_values[pass_num, i-1, j], delta_k0, delta_k, n2, n1, λ1, D, dz)
+                self.E2_values[pass_num, i, j] = E2_next
+                self.E_values[pass_num, i, j] = E_next
+                self.relative_phase_data[pass_num, i, j] = relative_phase
+            total_energy = np.sum(np.abs(self.E_values[pass_num, i, :])**2 + np.abs(self.E2_values[pass_num, i, :])**2)
+            #print(f'number of pass {pass_num}, Step {i}, Total Energy: {total_energy}')
+        
+        #return z_values, t_values, E2_values, E_values, relative_phase_data
 
 
-    def dE2dz(z, E, delta_k, n2, λ, D):
-        return -1j * ((2 * np.pi / λ * n2) * (D * fE2(E, delta_k, z)))
+    def dE2dz(self, z, E,  delta_k0, delta_k, n2, λ, D):
+        return -1j * ((2 * np.pi / λ * n2) * (D * self.fE2(E, delta_k0, delta_k, z)))
 
-    def dEdz(z, E2, E, delta_k, n, λ, D):
-        return -1j * ((2 * np.pi / λ * n) * (D * fE(E2, E, delta_k, z)))
+    def dEdz(self, z, E2, E,  delta_k0, delta_k, n, λ, D):
+        return -1j * ((2 * np.pi / λ * n) * (D * self.fE(E2, E, delta_k0, delta_k, z)))
 
-    def fE2(E, delta_k, z):
-        return E**2 * np.exp(1j * delta_k * z)
+    def fE2(self, E, delta_k0, delta_k, z):
+        return E**2 * np.exp(1j * ( (delta_k0) + delta_k * z))
 
-    def fE(E2, E, delta_k, z):
+    def fE(self, E2, E,  delta_k0, delta_k, z):
         E21 = E2 * np.conj(E)
-        return E21 * np.exp(-1j * delta_k * z)
+        return E21 * np.exp(-1j * ( (delta_k0) + delta_k * z))
 
-    def runge_kutta_step(z, E2, E, delta_k, n2, n, λ, D, dz):
-        k1_E2 = dz * dE2dz(z, E, delta_k, n2, λ, D)
-        k1_E = dz * dEdz(z, E2, E, delta_k, n, λ, D)
+    def runge_kutta_step(self, z, E2, E, delta_k0, delta_k, n2, n, λ, D, dz):
+        k1_E2 = dz * self.dE2dz(z, E, delta_k0, delta_k, n2, λ, D)
+        k1_E = dz * self.dEdz(z, E2, E, delta_k0, delta_k, n, λ, D)
         
-        k2_E2 = dz * dE2dz(z + dz/2, E + k1_E/2, delta_k, n2, λ, D)
-        k2_E = dz * dEdz(z + dz/2, E2 + k1_E2/2, E + k1_E/2, delta_k, n, λ, D)
+        k2_E2 = dz * self.dE2dz(z + dz/2, E + k1_E/2, delta_k0, delta_k, n2, λ, D)
+        k2_E = dz * self.dEdz(z + dz/2, E2 + k1_E2/2, E + k1_E/2, delta_k0, delta_k, n, λ, D)
         
-        k3_E2 = dz * dE2dz(z + dz/2, E + k2_E/2, delta_k, n2, λ, D)
-        k3_E = dz * dEdz(z + dz/2, E2 + k2_E2/2, E + k2_E/2, delta_k, n, λ, D)
+        k3_E2 = dz * self.dE2dz(z + dz/2, E + k2_E/2, delta_k0, delta_k, n2, λ, D)
+        k3_E = dz * self.dEdz(z + dz/2, E2 + k2_E2/2, E + k2_E/2, delta_k0, delta_k, n, λ, D)
         
-        k4_E2 = dz * dE2dz(z + dz, E + k3_E, delta_k, n2, λ, D)
-        k4_E = dz * dEdz(z + dz, E2 + k3_E2, E + k3_E, delta_k, n, λ, D)
+        k4_E2 = dz * self.dE2dz(z + dz, E + k3_E, delta_k0, delta_k, n2, λ, D)
+        k4_E = dz * self.dEdz(z + dz, E2 + k3_E2, E + k3_E, delta_k0, delta_k, n, λ, D)
         
         E2_next = E2 + (k1_E2 + 2*k2_E2 + 2*k3_E2 + k4_E2) / 6
         E_next = E + (k1_E + 2*k2_E + 2*k3_E + k4_E) / 6
@@ -1117,99 +1163,83 @@ class simulate_travel:
         
         return E2_next, E_next, relative_phase
 
-    def gaussian_pulse(t, t0, width, amplitude, omega):
+    def gaussian_pulse(self, t, t0, width, amplitude, omega):
         envelope = amplitude * np.exp(-(t - t0)**2 / (2 * width**2))
         pulse = envelope * np.exp(1j*omega*t)
         CW_wave = amplitude * np.exp(1j*omega*t)
         return CW_wave#pulse
-
-    def integrate_rk4(z_max, dz, t_max, dt, E2_0, E_0, delta_k, n2, n, λ, D):
-        num_z_steps = int(z_max / dz)
-        num_t_steps = int(t_max / dt)
-        
-        z_values = np.linspace(0, z_max, num_z_steps)
-        t_values = np.linspace(-t_max/2, t_max/2, num_t_steps)
-        
-        E2_values = np.zeros((num_z_steps, num_t_steps), dtype=complex)
-        E_values = np.zeros((num_z_steps, num_t_steps), dtype=complex)
-        relative_phase_data = np.zeros((num_z_steps, num_t_steps), dtype=float)
-        E_values[0, :] = E_0
-        
-        for i in range(1, num_z_steps):
-            for j in range(num_t_steps):
-                z = z_values[i-1]
-                E2_next, E_next, relative_phase = runge_kutta_step(z, E2_values[i-1, j], E_values[i-1, j], delta_k, n2, n, λ, D, dz)
-                E2_values[i, j] = E2_next
-                E_values[i, j] = E_next
-                relative_phase_data[i, j] = relative_phase
-            total_energy = np.sum(np.abs(E_values[i, :])**2 + np.abs(E2_values[i, :])**2)
-            print(f'Step {i}, Total Energy: {total_energy}')
-        
-        return z_values, t_values, E2_values, E_values, relative_phase_data
-
-
-    # Example usage
-    z_max = 1000.0  # Maximum value of z in micrometers
-    dz = 0.1  # Step size in micrometers
-    t_max = 10   # Temporal window in picoseconds
-    dt = 0.1     # Temporal step size in picoseconds
-    λ = 1.064    # Wavelength in micrometers
-    omega = 2*np.pi*299792458e-6/1.064
-    E_0_amplitude = 40.0e-02  # volts/micrometer
-    E_0_width = 2.0  # Pulse width in picoseconds
-    E_0_t0 = 0.0     # Pulse center in picoseconds
-    E_0 = gaussian_pulse(np.linspace(-t_max/2, t_max/2, int(t_max/dt)), E_0_t0, E_0_width, E_0_amplitude, omega)
-    E2_0 = np.zeros_like(E_0)
-
-    n = 1.565
     
-    n2 = 1.5656#1.5785 + 0j
-    delta_k = (2 * np.pi / 0.515) * (n2 - n)
+    def plot_results(self, z_values, t_values, E2_values, E_values, relative_phase_data):
+        num_plots = self.N * 2  # Total number of plots
+        rows = int(np.ceil(np.sqrt(num_plots * 5)))  # Number of rows
+        cols = int(np.ceil((num_plots * 5) / rows))  # Number of columns
 
-    D = 0.85e-06#0.85e-06
+        fig, axes = plt.subplots(rows, cols, figsize=(20, 15))
+        axes = axes.flatten()  # Flatten the array of axes for easy iteration
 
-    z_values, t_values, E2_values, E_values, relative_phase_data = integrate_rk4(z_max, dz, t_max, dt, E2_0, E_0, delta_k, n2, n, λ, D)
+        plot_num = 0
+        for pass_num in range(num_plots):
+            label_suffix = f' (Pass {pass_num + 1})'
+            
+            # Plot fundamental pulse evolution
+            ax = axes[plot_num]
+            im = ax.imshow(np.abs(E_values[pass_num])**2, aspect='auto', 
+                           extent=[t_values[pass_num].min(), t_values[pass_num].max(), 
+                                   z_values[pass_num].min(), z_values[pass_num].max()], 
+                           origin='lower')
+            fig.colorbar(im, ax=ax, label='Intensity')
+            ax.set_title('Fundamental Pulse Evolution' + label_suffix)
+            ax.set_xlabel('Time (ps)')
+            ax.set_ylabel('Propagation distance (µm)')
+            plot_num += 1
+            
+            # Plot second harmonic pulse evolution
+            ax = axes[plot_num]
+            im = ax.imshow(np.abs(E2_values[pass_num])**2, aspect='auto', 
+                           extent=[t_values[pass_num].min(), t_values[pass_num].max(), 
+                                   z_values[pass_num].min(), z_values[pass_num].max()], 
+                           origin='lower')
+            fig.colorbar(im, ax=ax, label='Intensity')
+            ax.set_title('Second Harmonic Pulse Evolution' + label_suffix)
+            ax.set_xlabel('Time (ps)')
+            ax.set_ylabel('Propagation distance (µm)')
+            plot_num += 1
 
-    # Plotting
-    plt.figure(figsize=(12, 6))
+            # Plot phase of pulse evolution
+            ax = axes[plot_num]
+            im = ax.imshow(relative_phase_data[pass_num], aspect='auto', 
+                           extent=[t_values[pass_num].min(), t_values[pass_num].max(), 
+                                   z_values[pass_num].min(), z_values[pass_num].max()], 
+                           origin='lower')
+            fig.colorbar(im, ax=ax, label='Relative Phase in rad')
+            ax.set_title('Phase of Pulse Evolution' + label_suffix)
+            ax.set_xlabel('Time (ps)')
+            ax.set_ylabel('Propagation distance (µm)')
+            plot_num += 1
 
-    plt.subplot(2, 3, 1)
-    plt.imshow(np.abs(E_values)**2, aspect='auto', extent=[t_values.min(), t_values.max(), z_values.min(), z_values.max()], origin='lower')
-    plt.colorbar(label='Intensity')
-    plt.title('Fundamental Pulse Evolution')
-    plt.xlabel('Time (ps)')
-    plt.ylabel('Propagation distance (µm)')
+            # Plot pulse envelope shape
+            ax = axes[plot_num]
+            ax.plot(np.linspace(0, self.t_max, 100), np.abs(E_values[pass_num, -1, :])**2, label=f'Pass {pass_num + 1}')
+            ax.set_title('Pulse Envelope Shape' + label_suffix)
+            ax.set_xlabel('Time (ps)')
+            ax.set_ylabel('Intensity')
+            plot_num += 1
+            
+            # Plot electric field
+            ax = axes[plot_num]
+            ax.plot(np.linspace(0, self.t_max, 100), E_values[pass_num, -1, :].real, label=f'Pass {pass_num + 1}')
+            ax.set_title('Electric Field' + label_suffix)
+            ax.set_xlabel('Time (ps)')
+            ax.set_ylabel('Electric Field')
+            plot_num += 1
 
-    plt.subplot(2, 3, 2)
-    plt.imshow(np.abs(E2_values)**2, aspect='auto', extent=[t_values.min(), t_values.max(), z_values.min(), z_values.max()], origin='lower')
-    plt.colorbar(label='Intensity')
-    plt.title('Second Harmonic Pulse Evolution')
-    plt.xlabel('Time (ps)')
-    plt.ylabel('Propagation distance (µm)')
+        # Hide any unused subplots
+        for j in range(plot_num, rows * cols):
+            fig.delaxes(axes[j])
 
-    plt.subplot(2, 3, 3)
-    plt.imshow(relative_phase_data, aspect='auto', extent=[t_values.min(), t_values.max(), z_values.min(), z_values.max()], origin='lower')
-    plt.colorbar(label='relative phase in rad')
-    plt.title('phase of Pulse Evolution')
-    plt.xlabel('Time (ps)')
-    plt.ylabel('Propagation distance (µm)')
-
-    plt.subplot(2, 3, 4)
-    plt.plot(np.linspace(0, t_max, 100), np.abs(E_0)**2)
-    plt.title('Pulse envelope shape')
-    plt.xlabel('Time (ps)')
-    plt.ylabel('intensity')
-
-    plt.subplot(2, 3, 5)
-    plt.plot(np.linspace(0, t_max, 100), E_0.real)
-    plt.title('electric field')
-    plt.xlabel('Time (ps)')
-    plt.ylabel('electric field')
-
-    plt.tight_layout()
-    plt.show()
-    
-    
+        plt.tight_layout()
+        plt.show()
+        
 app = QApplication(sys.argv)
 window = MainWindow()
 window.show()
@@ -1218,7 +1248,7 @@ window.close()
 
 
 # =============================================================================
-'problems & notes right now'
+'problems & notes'
 # =============================================================================
 # there scemes to be no dependancy over refractive index of either air or nl crystal which we want to include  --- problem solved
 # after operator operate on the inpuut 4*1 vector they should not change for the next opticxal element operation   --- problem solved
